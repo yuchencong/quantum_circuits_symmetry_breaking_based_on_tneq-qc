@@ -1,11 +1,11 @@
 import jax
 import numpy as np
 import jax.numpy as jnp
-import functools
-import re
-import random
+import itertools
+import re, random
 from typing import Union
-import opt_einsum
+from config import Configuration
+from copteinsum import ContractorOptEinsum
 
 class QCTNHelper:
     """
@@ -53,51 +53,13 @@ class QCTNHelper:
             graph += f"{qubit}\n"
 
         return graph.strip()
-
-class ContractorOptEinsum:
-    """
-    ContractorOptEinsum class for optimized tensor contraction using opt_einsum.
     
-    This class provides methods to contract tensors using the opt_einsum library,
-    which is optimized for performance and memory efficiency.
-    """
-
     @staticmethod
-    def contract(tensors, equation, optimize='greedy'):
-        """
-        Contract tensors using opt_einsum.
-        
-        Args:
-            tensors (list): List of tensors to be contracted.
-            equation (str): The einsum equation specifying the contraction.
-            optimize (str): Optimization strategy for contraction. Default is 'greedy'.
-        
-        Returns:
-            jnp.ndarray: The result of the tensor contraction.
-        """
-        return opt_einsum.contract(equation, *tensors, optimize=optimize)
-
-class ContractorQCTN:
-    """
-    ContractorQCTN class for contracting quantum circuit tensor networks.
-    
-    This class provides methods to contract quantum circuit tensor networks using JAX.
-    It supports both contraction with inputs and contraction with another QCTN instance.
-    """
-
-    @staticmethod
-    def contract(qctn, inputs=None):
-        """
-        Contract the quantum circuit tensor network with given inputs.
-        
-        Args:
-            qctn (QCTN): The quantum circuit tensor network to contract.
-            inputs (jnp.ndarray or dict, optional): The inputs for the contraction operation.
-        
-        Returns:
-            jnp.ndarray: The result of the contraction operation.
-        """
-        return qctn.contract(attach=inputs)
+    def jax_triu_ndindex(n):
+        """Generate indices for the upper triangular part of a square matrix."""
+        for i in range(n):
+            for j in range(i + 1, n):
+                yield (i, j)
 
 class QCTN:
     """
@@ -140,10 +102,17 @@ class QCTN:
             # If no uppercase core symbols found, try to find all chars in the CJK Unified Ideographs range
             self.cores = list(set([c for c in graph if 0x4E00 <= ord(c) <= 0x9FFF]))
         self.ncores = len(self.cores)
+
+        self.cores = sorted(self.cores)
+
+        # This will build the attributes `self.circuit` and `self.adjacency_matrix`
         self._circuit_to_adjacency()
 
-        # initialize the circuit with input ranks, adjacency matrix, and output ranks
+        # Initialize the circuit with input ranks, adjacency matrix, and output ranks
         self.initialize_random_key = jax.random.PRNGKey(0)
+
+        # Initialize the cores with random values
+        self.cores_weigts = {}
         self._init_cores()
 
     def __repr__(self):
@@ -177,7 +146,7 @@ class QCTN:
             input_ranks[i] = []
             output_ranks[i] = []
 
-        cores = "".join(sorted(self.cores))
+        cores = "".join(self.cores)
         dict_core2idx = {core: idx for idx, core in enumerate(self.cores)}
         input_pattern = re.compile(rf"^(\d+)([{cores}])")
         output_pattern = re.compile(rf"([{cores}])(\d+)$")
@@ -216,7 +185,6 @@ class QCTN:
             None: The cores are stored in the `cores_weigts` attribute.
         """
 
-        self.cores_weigts = {}
         for idx, core_name in enumerate(self.cores):
             # These ranks should be expressed as lists of integers ordered by the qubits.
             # Therefore we conduct "+" on all of these ranks to obtain the shape of the core.
@@ -224,25 +192,18 @@ class QCTN:
             output_rank = self.circuit[2][idx]
             adjacency_ranks = self.adjacency_matrix[idx, :]
 
-            core_shape = input_rank + adjacency_ranks + output_rank
-            core = jax.random.normal(self.initialize_random_key, shape=core_shape) / 1e5            
+            core_shape = input_rank + list(itertools.chain.from_iterable(adjacency_ranks)) + output_rank
+            core = jax.random.normal(self.initialize_random_key, shape=core_shape) * Configuration.initialize_variance          
             self.cores_weigts[core_name] = core
 
-    def _contract_only(self, *args, **kwargs):
+    def _contract_core_only(self, engine=ContractorOptEinsum):
         """
         Contract the quantum circuit tensor network without inputs.
-        
-        Args:
-            *args: Positional arguments for contraction.
-            **kwargs: Keyword arguments for contraction.
-        
-        Returns:
-            The result of the contraction operation.
         """
-        # Placeholder for contraction logic
-        raise NotImplementedError("Contraction logic is not implemented yet.")
 
-    def _contract_with_inputs(self, inputs: Union[jnp.ndarray, dict] = None):
+        return engine.contract_core_only(self)
+
+    def _contract_with_inputs(self, inputs: Union[jnp.ndarray, dict] = None, engine=ContractorOptEinsum):
         """
         Contract the quantum circuit tensor network with given inputs.
         
@@ -288,7 +249,7 @@ class QCTN:
         # Placeholder for contraction logic
         raise NotImplementedError("Contraction logic is not implemented yet.")
 
-    def _contract_with_QCTN(self, qctn):
+    def _contract_with_QCTN(self, qctn, engine=ContractorOptEinsum):
         """
         Contract the quantum circuit tensor network with another QCTN instance.
         
@@ -308,7 +269,7 @@ class QCTN:
         # Placeholder for contraction logic
         raise NotImplementedError("Contraction logic is not implemented yet.")
     
-    def _contract_for_core_gradient(self, core_name, inputs=None):
+    def _contract_for_core_gradient(self, core_name, inputs=None, engine=ContractorOptEinsum):
         """
         Contract the quantum circuit tensor network for a specific core gradient.
         
@@ -329,35 +290,26 @@ class QCTN:
         # Placeholder for contraction logic
         raise NotImplementedError("Contraction logic is not implemented yet.")
 
-    def contract(self, attach:Union[jnp.ndarray, dict, 'QCTN']=None, *args, **kwargs):
+    def contract(self, attach:Union[jnp.ndarray, dict, 'QCTN']=None, engine=ContractorOptEinsum):
         """
         Contract the quantum circuit tensor network.
         
         Args:
-            *args: Positional arguments for contraction.
-            **kwargs: Keyword arguments for contraction.
-        
+            attach (Union[jnp.ndarray, dict, 'QCTN'], optional): The inputs for the contraction operation.
+                If a dictionary is provided, it should map core names to their respective input tensors.
+                If a jnp.ndarray is provided, it should be a tensor with the shape matching the input ranks of the circuit.
+                If a QCTN instance is provided, it will contract with that instance.
+            engine (ContractorOptEinsum): The contraction engine to use. Default is ContractorOptEinsum.
+
         Returns:
             The result of the contraction operation.
         """
 
         if attach is None:
-            return self._contract_only(*args, **kwargs)
+            return self._contract_core_only(engine)
         elif isinstance(attach, Union[jnp.ndarray, dict]):
-            return self._contract_with_inputs(attach, *args, **kwargs)
+            return self._contract_with_inputs(attach, engine)
         elif isinstance(attach, 'QCTN'):
-            return self._contract_with_QCTN(attach, *args, **kwargs)
+            return self._contract_with_QCTN(attach, engine)
         else:
             raise TypeError("attach must be a jnp.ndarray, a dictionary, or an instance of QCTN.")
-
-if __name__ == "__main__":
-    # example_graph = QCTNHelper.generate_random_example_graph(30, 50)
-    # print(f"Example Graph: \n {example_graph}")
-
-    example_graph = QCTNHelper.generate_example_graph()
-    print(f"Example Graph: \n{example_graph}")
-    qctn = QCTN(example_graph)
-    print(f"QCTN Adjacency Matrix:\n{qctn.__repr__()}")
-    print(f"Cores: {qctn.cores}")
-    print(f"Number of Qubits: {qctn.nqubits}")
-    print(f"Number of Cores: {qctn.ncores}")

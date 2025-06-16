@@ -1,0 +1,28 @@
+from config import Configuration
+from tenmul_qc import QCTN, QCTNHelper
+import jax
+import jax.numpy as jnp
+import itertools
+from functools import reduce
+
+class ContractorQCTN:
+    """
+    ContractorQCTN class for contracting quantum circuit tensor networks.
+    
+    This class provides methods to contract quantum circuit tensor networks using JAX.
+    It supports both contraction with inputs and contraction with another QCTN instance.
+    """
+
+    @staticmethod
+    def contract(qctn, inputs=None):
+        """
+        Contract the quantum circuit tensor network with given inputs.
+        
+        Args:
+            qctn (QCTN): The quantum circuit tensor network to contract.
+            inputs (jnp.ndarray or dict, optional): The inputs for the contraction operation.
+        
+        Returns:
+            jnp.ndarray: The result of the contraction operation.
+        """
+        return qctn.contract(attach=inputs)
