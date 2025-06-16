@@ -85,18 +85,16 @@ class ContractorOptEinsum:
 
         return retracted_QCTN
     
-
     @staticmethod
-    def contract(tensors, equation, optimize='greedy'):
+    def contract_with_inputs(qctn: 'QCTN', inputs):
         """
-        Contract tensors using opt_einsum.
+        Contract the given QCTN with specified inputs.
         
         Args:
-            tensors (list): List of tensors to be contracted.
-            equation (str): The einsum equation specifying the contraction.
-            optimize (str): Optimization strategy for contraction. Default is 'greedy'.
+            qctn (QCTN): The quantum circuit tensor network to contract.
+            inputs (jnp.ndarray): The inputs for the contraction operation.
         
         Returns:
             jnp.ndarray: The result of the tensor contraction.
         """
-        return opt_einsum.contract(equation, *tensors, optimize=optimize)
+        return qctn.contract(attach=inputs)

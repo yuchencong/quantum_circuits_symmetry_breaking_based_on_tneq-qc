@@ -203,51 +203,27 @@ class QCTN:
 
         return engine.contract_core_only(self)
 
-    def _contract_with_inputs(self, inputs: Union[jnp.ndarray, dict] = None, engine=ContractorOptEinsum):
+    def _contract_with_inputs(self, inputs: jnp.ndarray = None, engine=ContractorOptEinsum):
         """
         Contract the quantum circuit tensor network with given inputs.
-        
+
         Args:
-            inputs (jnp.ndarray or dict): The inputs for the contraction operation.
-            If a dictionary is provided, it should map core names to their respective input tensors.
-            If a jnp.ndarray is provided, it should be a tensor with the shape matching the input ranks of the circuit.
-        
+            inputs (jnp.ndarray): The inputs for the contraction operation.
+                It should be a tensor with the shape matching the input ranks of the circuit.
+
         Returns:
             The result of the contraction operation.
         """
+        
+        # Validate inputs
         if inputs is None:
             raise ValueError("Inputs must be provided for contraction.")
-        if isinstance(inputs, dict):
-            # If inputs are provided as a dictionary, we need to ensure they match the core names
-            for core_name in self.cores:
-                if core_name not in inputs:
-                    raise ValueError(f"Input for core '{core_name}' is missing.")
-            # Convert the dictionary to a list of tensors ordered by core names
-            inputs = [inputs[core_name] for core_name in self.cores]
-        elif isinstance(inputs, jnp.ndarray):
-            # If inputs are provided as a single tensor, we need to ensure it matches the input ranks
-            if inputs.shape != tuple(self.circuit[0]):
-                raise ValueError(f"Input tensor shape {inputs.shape} does not match expected shape {tuple(self.circuit[0])}.")
-            # Convert the single tensor to a list of tensors ordered by core names
-            inputs = [inputs] * self.ncores
-        else:
-            raise TypeError("Inputs must be a jnp.ndarray or a dictionary mapping core names to tensors.")
-        # Here we would implement the contraction logic using JAX or other libraries.
-        # For now, we will raise NotImplementedError as a placeholder.
-        # This is a placeholder for the contraction logic.
-        if len(inputs) != self.ncores:
-            raise ValueError(f"Expected {self.ncores} inputs, but got {len(inputs)}.")
-        if any(input_tensor.ndim != len(self.circuit[0][idx]) for idx, input_tensor in enumerate(inputs)):
-            raise ValueError("Input tensors must have the same number of dimensions as their corresponding core input ranks.")
-        # Here we would implement the contraction logic using JAX or other libraries.
-        # For now, we will raise NotImplementedError as a placeholder.
-        if any(core_name not in self.cores_weigts for core_name in self.cores):
-            raise ValueError("Some core names in the inputs do not match the initialized cores.")
-        # This is a placeholder for the contraction logic.
-        # For now, we will raise NotImplementedError as a placeholder.
+        if not isinstance(inputs, jnp.ndarray):
+            raise TypeError("Inputs must be a jnp.ndarray.")
+        if inputs.shape != tuple(self.circuit[0]):
+            raise ValueError(f"Input tensor shape {inputs.shape} does not match expected shape {tuple(self.circuit[0])}.")
 
-        # Placeholder for contraction logic
-        raise NotImplementedError("Contraction logic is not implemented yet.")
+        return engine.contract_with_inputs(self, inputs)
 
     def _contract_with_QCTN(self, qctn, engine=ContractorOptEinsum):
         """
@@ -275,9 +251,8 @@ class QCTN:
         
         Args:
             core_name (str): The name of the core to contract for gradient computation.
-            inputs (jnp.ndarray or dict, optional): The inputs for the contraction operation.
-                If a dictionary is provided, it should map core names to their respective input tensors.
-                If a jnp.ndarray is provided, it should be a tensor with the shape matching the input ranks of the circuit.
+            inputs (jnp.ndarray, optional): The inputs for the contraction operation.
+                It should be a tensor with the shape matching the input ranks of the circuit.
         
         Returns:
             The result of the contraction operation for the specified core.
@@ -290,13 +265,12 @@ class QCTN:
         # Placeholder for contraction logic
         raise NotImplementedError("Contraction logic is not implemented yet.")
 
-    def contract(self, attach:Union[jnp.ndarray, dict, 'QCTN']=None, engine=ContractorOptEinsum):
+    def contract(self, attach: Union[jnp.ndarray, 'QCTN'] = None, engine=ContractorOptEinsum):
         """
         Contract the quantum circuit tensor network.
-        
+
         Args:
-            attach (Union[jnp.ndarray, dict, 'QCTN'], optional): The inputs for the contraction operation.
-                If a dictionary is provided, it should map core names to their respective input tensors.
+            attach (Union[jnp.ndarray, 'QCTN'], optional): The inputs for the contraction operation.
                 If a jnp.ndarray is provided, it should be a tensor with the shape matching the input ranks of the circuit.
                 If a QCTN instance is provided, it will contract with that instance.
             engine (ContractorOptEinsum): The contraction engine to use. Default is ContractorOptEinsum.
@@ -307,9 +281,9 @@ class QCTN:
 
         if attach is None:
             return self._contract_core_only(engine)
-        elif isinstance(attach, Union[jnp.ndarray, dict]):
+        elif isinstance(attach, jnp.ndarray):
             return self._contract_with_inputs(attach, engine)
-        elif isinstance(attach, 'QCTN'):
+        elif isinstance(attach, QCTN):
             return self._contract_with_QCTN(attach, engine)
         else:
-            raise TypeError("attach must be a jnp.ndarray, a dictionary, or an instance of QCTN.")
+            raise TypeError("attach must be a jnp.ndarray or an instance of QCTN.")
