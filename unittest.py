@@ -73,16 +73,24 @@ if __name__ == "__main__":
         result = qctn_example.contract(qctn_target, engine=UnitTestQCTN.contraction_engine)
         print(f"Contraction Result with Another QCTN: {result}")
 
-    print("\nTesting QCTN Vector Input Contraction with opt_einsum:")
+        print("\nTesting QCTN Vector Input Contraction with opt_einsum:")
+        qctn_example = UnitTestQCTN.test_qctn_initialization()
+
+        inputs = [
+            jax.random.normal(jax.random.PRNGKey(i), shape)
+            for i, shape in enumerate(itertools.chain.from_iterable(qctn_example.circuit[0]))
+        ]
+        result = qctn_example.contract(inputs, engine=UnitTestQCTN.contraction_engine)
+        print(f"Contraction Result with Inputs: {result}")
+
+    print("\nTesting QCTN Contraction with Another QCTN for gradient:")
     qctn_example = UnitTestQCTN.test_qctn_initialization()
-
-    inputs = [
-        jax.random.normal(jax.random.PRNGKey(i), shape)
-        for i, shape in enumerate(itertools.chain.from_iterable(qctn_example.circuit[0]))
-    ]
-    result = qctn_example.contract(inputs, engine=UnitTestQCTN.contraction_engine)
-    print(f"Contraction Result with Inputs: {result}")
-
+    qctn_target = UnitTestQCTN.test_qctn_initialization(traget=True)
+    loss, grads = qctn_example.contract_with_QCTN_for_gradient(qctn_target, engine=UnitTestQCTN.contraction_engine)
+    print(f"Gradient: {grads}")
+    print(f"Core shape: {[c.shape for c in qctn_example.cores_weigts.values()]}")
+    print(f"Gradient shape: {[g.shape for g in grads]}")
+    
     # Further tests can be added here
     print("\nAll tests completed.")
     

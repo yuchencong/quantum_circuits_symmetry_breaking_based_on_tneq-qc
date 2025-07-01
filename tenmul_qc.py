@@ -127,6 +127,9 @@ class QCTN:
         self.cores_weigts = {}
         self._init_cores()
 
+        # Placeholders for einsum expressions
+        self.einsum_expr = None
+
     def __repr__(self):
         """
         String representation of the QCTN object.
@@ -278,8 +281,7 @@ class QCTN:
         Returns:
             The result of the contraction operation.
         """
-        if not isinstance(qctn, QCTN):
-            raise TypeError("The argument must be an instance of QCTN.")
+
         if not list(itertools.chain.from_iterable(self.circuit[0])) == list(itertools.chain.from_iterable(qctn.circuit[0])):
             raise ValueError("Input ranks of the two QCTNs do not match.")
         if not list(itertools.chain.from_iterable(self.circuit[2])) == list(itertools.chain.from_iterable(qctn.circuit[2])):
@@ -287,25 +289,23 @@ class QCTN:
         
         return engine.contract_with_QCTN(self, qctn)
     
-    def _contract_for_core_gradient(self, core_name, inputs=None, engine=ContractorOptEinsum):
+    def _contract_with_QCTN_for_gradient(self, qctn, engine=ContractorOptEinsum):
         """
         Contract the quantum circuit tensor network for a specific core gradient.
         
         Args:
-            core_name (str): The name of the core to contract for gradient computation.
-            inputs (jnp.ndarray, optional): The inputs for the contraction operation.
-                It should be a tensor with the shape matching the input ranks of the circuit.
+            qctn : Another instance of QCTN to contract with.
         
         Returns:
-            The result of the contraction operation for the specified core.
+            The result of the contraction operation for core gradient.
         """
-        if core_name not in self.cores:
-            raise ValueError(f"Core '{core_name}' is not part of this QCTN.")
-        # Here we would implement the contraction logic using JAX or other libraries.
-        # For now, we will raise NotImplementedError as a placeholder.
-        
-        # Placeholder for contraction logic
-        raise NotImplementedError("Contraction logic is not implemented yet.")
+
+        if not list(itertools.chain.from_iterable(self.circuit[0])) == list(itertools.chain.from_iterable(qctn.circuit[0])):
+            raise ValueError("Input ranks of the two QCTNs do not match.")
+        if not list(itertools.chain.from_iterable(self.circuit[2])) == list(itertools.chain.from_iterable(qctn.circuit[2])):
+            raise ValueError("Output ranks of the two QCTNs do not match.")
+
+        return engine.contract_with_QCTN_for_gradient(self, qctn)
 
     def contract(self, attach: Union[jnp.ndarray, 'QCTN', list] = None, engine=ContractorOptEinsum):
         """
@@ -332,3 +332,37 @@ class QCTN:
             return self._contract_with_QCTN(attach, engine)
         else:
             raise TypeError("attach must be a jnp.ndarray, a list of jnp.ndarray or an instance of QCTN.")
+
+    def contract_with_QCTN_for_gradient(self, attach, engine=ContractorOptEinsum):
+        """
+        Contract the quantum circuit tensor network, return the loss and the gradient for all cores,
+        The attach must be a QCTN instance.
+        The loss for gradient computation is (X @ Y^T - 1) ** 2, where X is self and Y is the attach QCTN.
+        The gradient only computes the core gradients, not the input gradients.
+        
+
+        Args:
+            attach ('QCTN'): The inputs for the contraction operation.
+            engine (ContractorOptEinsum): The contraction engine to use. Default is ContractorOptEinsum.
+
+        Returns:
+            The result of value and grad.
+        """
+        if not isinstance(attach, QCTN):
+            raise TypeError("attach must be an instance of QCTN.")
+        return self._contract_with_QCTN_for_gradient(attach, engine)
+    
+    def optimizer_step(self, optimizer, loss_fn, inputs=None):
+        """
+        Perform a single optimization step using the provided optimizer and loss function.
+        
+        Args:
+            optimizer: The optimizer to use for the optimization step.
+            loss_fn: The loss function to compute the loss and gradients.
+            inputs (jnp.ndarray, optional): The inputs for the contraction operation.
+                It should be a tensor with the shape matching the input ranks of the circuit.
+
+        Returns:
+            The updated QCTN instance after the optimization step.
+        """
+        return optimizer.step(loss_fn, self, inputs)

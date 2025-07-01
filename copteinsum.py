@@ -3,6 +3,7 @@ from config import Configuration
 import itertools
 import opt_einsum
 import jax
+import jax.numpy as jnp
 
 class ContractorOptEinsum:
     """
@@ -73,8 +74,8 @@ class ContractorOptEinsum:
         print(f'Einsum Equation: {einsum_equation}')
         print(f'Tensor Shapes: {tensor_shapes}')
 
-        einsum_expr = opt_einsum.contract_expression(einsum_equation, *tensor_shapes, optimize=Configuration.opt_einsum_optimize)
-        jit_retraction = jax.jit(einsum_expr)
+        qctn.einsum_expr = opt_einsum.contract_expression(einsum_equation, *tensor_shapes, optimize=Configuration.opt_einsum_optimize)
+        jit_retraction = jax.jit(qctn.einsum_expr)
         retracted_QCTN = jit_retraction(*[cores_weights[core_name] for core_name in cores_name])
 
         return retracted_QCTN
@@ -143,8 +144,8 @@ class ContractorOptEinsum:
         print(f'Einsum Equation: {einsum_equation}')
         print(f'Tensor Shapes: {tensor_shapes}')
 
-        einsum_expr = opt_einsum.contract_expression(einsum_equation, *tensor_shapes, optimize=Configuration.opt_einsum_optimize)
-        jit_retraction = jax.jit(einsum_expr)
+        qctn.einsum_expr = opt_einsum.contract_expression(einsum_equation, *tensor_shapes, optimize=Configuration.opt_einsum_optimize)
+        jit_retraction = jax.jit(qctn.einsum_expr)
 
         inputs_cores = [inputs] + [cores_weights[core_name] for core_name in cores_name]
         retracted_QCTN = jit_retraction(*inputs_cores)
@@ -215,8 +216,8 @@ class ContractorOptEinsum:
         print(f'Einsum Equation: {einsum_equation}')
         print(f'Tensor Shapes: {tensor_shapes}')
 
-        einsum_expr = opt_einsum.contract_expression(einsum_equation, *tensor_shapes, optimize=Configuration.opt_einsum_optimize)
-        jit_retraction = jax.jit(einsum_expr)
+        qctn.einsum_expr = opt_einsum.contract_expression(einsum_equation, *tensor_shapes, optimize=Configuration.opt_einsum_optimize)
+        jit_retraction = jax.jit(qctn.einsum_expr)
 
         inputs_cores = inputs + [cores_weights[core_name] for core_name in cores_name]
         retracted_QCTN = jit_retraction(*inputs_cores)
@@ -224,7 +225,7 @@ class ContractorOptEinsum:
         return retracted_QCTN
     
     @staticmethod
-    def contract_with_QCTN(qctn, target_qctn):
+    def contract_with_QCTN(qctn, target_qctn, initialization_mode=False):
         """
         Contract the given QCTN with a target QCTN.
         
@@ -322,8 +323,12 @@ class ContractorOptEinsum:
         print(f'Einsum Equation: {einsum_equation}')
         print(f'Tensor Shapes: {tensor_shapes}')
 
-        einsum_expr = opt_einsum.contract_expression(einsum_equation, *tensor_shapes, optimize=Configuration.opt_einsum_optimize)
-        jit_retraction = jax.jit(einsum_expr)
+        qctn.einsum_expr = opt_einsum.contract_expression(einsum_equation, *tensor_shapes, optimize=Configuration.opt_einsum_optimize)
+        jit_retraction = jax.jit(qctn.einsum_expr)
+
+        if initialization_mode:
+            # In initialization mode, we do not actually contract the target QCTN
+            return qctn.einsum_expr
 
         inputs_cores = [cores_weights[core_name] for core_name in cores_name] + \
                        [target_cores_weights[core_name] for core_name in target_cores_name]
@@ -331,10 +336,32 @@ class ContractorOptEinsum:
         retracted_QCTN = jit_retraction(*inputs_cores)
 
         return retracted_QCTN
-    
-    def _contract_for_core_gradient(*args, **kwargs):
+
+    @staticmethod
+    def contract_with_QCTN_for_gradient(qctn, target_qctn):
         """
         We use JAX's autograd to compute the core gradient.
         """
 
-        raise NotImplementedError("Core gradient is calculated by jax autogradient.")
+        cores_name = qctn.cores
+        cores_weights = qctn.cores_weigts
+        target_cores_name = target_qctn.cores
+        target_cores_weights = target_qctn.cores_weigts
+        
+        inputs_cores = [cores_weights[core_name] for core_name in cores_name] + \
+            [target_cores_weights[core_name] for core_name in target_cores_name]
+
+        def mse_loss_fn(*inputs_cores):
+            retracted_QCTN = qctn.einsum_expr(*inputs_cores)
+            return jnp.mean((retracted_QCTN - 1.0) ** 2) 
+
+        if qctn.einsum_expr is None:
+            ContractorOptEinsum.contract_with_QCTN(qctn, target_qctn, initialization_mode=True)
+            argnums = list(range(len(cores_name)))
+            qctn.jit_retraction_with_QCTN_value_gradient = jax.jit(jax.value_and_grad(mse_loss_fn, 
+                                                                                      argnums=argnums))
+
+        loss, grad_cores = qctn.jit_retraction_with_QCTN_value_gradient(*inputs_cores)
+        print(f'Loss: {loss}')
+
+        return loss, grad_cores
