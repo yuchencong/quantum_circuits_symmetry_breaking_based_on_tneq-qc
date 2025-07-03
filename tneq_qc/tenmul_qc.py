@@ -4,8 +4,8 @@ import jax.numpy as jnp
 import itertools
 import re, random
 from typing import Union
-from config import Configuration
-from copteinsum import ContractorOptEinsum
+from .config import Configuration
+from .copteinsum import ContractorOptEinsum
 
 class QCTNHelper:
     """
@@ -130,6 +130,43 @@ class QCTN:
         # Placeholders for einsum expressions
         self.einsum_expr = None
 
+    @classmethod
+    def envolve_from_another_qctn(cls, qctn, strategies=None):
+        """
+        Create a new QCTN instance by evolving from another QCTN instance.
+        
+        Args:
+            qctn (QCTN): The original QCTN instance to evolve from.
+            strategies (list, optional): A list of strategies for evolution. Defaults to None.
+        
+        Returns:
+            QCTN: A new QCTN instance evolved from the original.
+        """
+        if strategies is None \
+           or (isinstance(strategies, list) and not strategies):
+            # If no strategies are provided, simply copy the original QCTN
+            # This is useful for cases where we want to create a new instance without any modifications.
+            # The optimization can be skipped.
+            if isinstance(qctn, cls):
+                # If qctn is already an instance of QCTN, copy it
+                return cls.copy(qctn)
+            else:
+                # If qctn is not an instance of QCTN, raise an error
+                raise TypeError("qctn must be an instance of QCTN.")
+
+        if isinstance(strategies, function):
+            new_graph = strategies(qctn.graph)
+            return cls(new_graph)
+        elif isinstance(strategies, list):
+            # Apply each strategy to the original graph
+            new_graph = qctn.graph
+            for strategy in strategies:
+                if callable(strategy):
+                    new_graph = strategy(new_graph)
+                else:
+                    raise TypeError("Each strategy must be a callable function.")
+            return cls(new_graph)
+
     def __repr__(self):
         """
         String representation of the QCTN object.
@@ -239,7 +276,6 @@ class QCTN:
             raise ValueError(f"Input tensor shape {inputs.shape} does not match expected shape {tuple(itertools.chain.from_iterable(self.circuit[0]))}.")
 
         return engine.contract_with_inputs(self, inputs)
-    
 
     def _contract_with_vector_inputs(self, inputs: list = None, engine=ContractorOptEinsum):
         """
@@ -269,7 +305,6 @@ class QCTN:
             raise ValueError(f"Input tensor shapes {tuple(t.shape for t in inputs)} do not match expected shape {tuple(itertools.chain.from_iterable(self.circuit[0]))}.")
 
         return engine.contract_with_vector_inputs(self, inputs)
-
 
     def _contract_with_QCTN(self, qctn, engine=ContractorOptEinsum):
         """

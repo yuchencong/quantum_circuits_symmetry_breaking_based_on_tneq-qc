@@ -1,8 +1,8 @@
-from config import Configuration
-from tenmul_qc import QCTN, QCTNHelper
-from cqctn import ContractorQCTN
-from copteinsum import ContractorOptEinsum
-from optimizer import Optimizer
+from tneq_qc.config import Configuration
+from tneq_qc.tenmul_qc import QCTN, QCTNHelper
+from tneq_qc.cqctn import ContractorQCTN
+from tneq_qc.copteinsum import ContractorOptEinsum
+from tneq_qc.optimizer import Optimizer
 import jax, itertools
 import jax.numpy as jnp
 

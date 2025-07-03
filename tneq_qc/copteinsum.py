@@ -1,5 +1,5 @@
 from __future__ import annotations
-from config import Configuration
+from .config import Configuration
 import itertools
 import opt_einsum
 import jax
@@ -36,7 +36,7 @@ class ContractorOptEinsum:
 
         adjacency_matrix_for_interaction = adjacency_matrix.copy()
 
-        from tenmul_qc import QCTNHelper
+        from .tenmul_qc import QCTNHelper
         for element in QCTNHelper.jax_triu_ndindex(len(cores_name)):
             i, j = element
             if adjacency_matrix_for_interaction[i, j]:
@@ -103,7 +103,7 @@ class ContractorOptEinsum:
 
         adjacency_matrix_for_interaction = adjacency_matrix.copy()
 
-        from tenmul_qc import QCTNHelper
+        from .tenmul_qc import QCTNHelper
         for element in QCTNHelper.jax_triu_ndindex(len(cores_name)):
             i, j = element
             if adjacency_matrix_for_interaction[i, j]:
@@ -175,7 +175,7 @@ class ContractorOptEinsum:
 
         adjacency_matrix_for_interaction = adjacency_matrix.copy()
 
-        from tenmul_qc import QCTNHelper
+        from .tenmul_qc import QCTNHelper
         for element in QCTNHelper.jax_triu_ndindex(len(cores_name)):
             i, j = element
             if adjacency_matrix_for_interaction[i, j]:
@@ -251,7 +251,7 @@ class ContractorOptEinsum:
 
         adjacency_matrix_for_interaction = adjacency_matrix.copy()
 
-        from tenmul_qc import QCTNHelper
+        from .tenmul_qc import QCTNHelper
         for element in QCTNHelper.jax_triu_ndindex(len(cores_name)):
             i, j = element
             if adjacency_matrix_for_interaction[i, j]:
