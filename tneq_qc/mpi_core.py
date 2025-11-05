@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Final
 
 ###################### TAG CLASSES FOR COMMUNICATION ######################
@@ -59,7 +59,7 @@ class AGENT_STATUS:
     
 @dataclass
 class INDIVIDUAL_STATUS:
-    assigned: list[int] = []
+    assigned: list[int] = field(default_factory=list)
     repeated: int = 0
     finished: bool = False
     minimal_estimation_time: float = 1e9

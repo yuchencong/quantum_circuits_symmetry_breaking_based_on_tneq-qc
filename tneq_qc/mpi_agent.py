@@ -1,12 +1,14 @@
 from typing import Any
-import numpy as np, os, sys, time, gc
+import numpy as np, os, sys, time, gc, logging
 np.set_printoptions(precision=2)
-from tenmul4 import TensorNetwork
-import tensorflow as tf
-tf.compat.v1.disable_eager_execution()
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' 
+import jax
+import jax.numpy as jnp
 import mpi4py
-from mpi_core import TAGS, REASONS, SURVIVAL, load_func
+from .mpi_core import TAGS, REASONS, SURVIVAL, load_func
+from .tenmul_qc import QCTN
+from .cqctn import ContractorQCTN
+from .copteinsum import ContractorOptEinsum
+from .config import Configuration
 
 class MPI_Agent(object):
 
@@ -26,11 +28,18 @@ class MPI_Agent(object):
         self.comm = comm
         self.rank = comm.Get_rank()
         self.time = 0
+        self.busy_status = False
         self.start_time = time.time()
         self.logger = kwargs['logger']
         self.logger.info(f'MPI_Agent {self.rank} started.')
         self.optimizer = load_func(kwargs['optimization']['optimizer'])
         self.optimizer_param = kwargs['optimization']['optimizer_params']
+        
+        # QCTN target is passed in during initialization (already initialized)
+        self.qctn_target = None  # Will be set in sync_goal
+        
+        # Determine contraction engine
+        self.contraction_engine = ContractorOptEinsum if Configuration.contraction_engine == 'opt_einsum' else ContractorQCTN
 
     def tik(self, sec):
         self.time += sec
@@ -38,17 +47,25 @@ class MPI_Agent(object):
 
     ################ MPI COMMUNICATION ################
     def sync_goal(self):
+        """Synchronize the target QCTN from Overlord (already initialized)"""
         try:
-            self.evoluation_goal = None
-            self.evoluation_goal = self.comm.bcast(self.evoluation_goal, root=0)
+            self.qctn_target = None
+            self.qctn_target = self.comm.bcast(self.qctn_target, root=0)
+            self.logger.info(f'Received qctn_target with {self.qctn_target.nqubits} qubits and {self.qctn_target.ncores} cores.')
         except:
-            self.logger.error(self.rank, 'reported errors in receiving evoluation_goal')
+            self.logger.error(f'Agent {self.rank} reported errors in receiving qctn_target')
             raise
 
     def report_surival(self, current_iter, max_iter):
         status, msg = self.req_surv.test()
+
+        self.logger.debug(f'Agent {self.rank} checking for survival ping: status={status}, msg={msg}')
+
         if status:
-            if msg: return msg
+            self.req_surv = self.comm.irecv(source=0, tag=TAGS.INFO_SURVIVAL)
+
+            if msg:
+                return msg
             real_up_time = time.time() - self.start_time
             return_dict = {
                 'rank': self.rank,
@@ -60,27 +77,39 @@ class MPI_Agent(object):
             }
             self.comm.isend(return_dict, dest=0, tag=TAGS.INFO_SURVIVAL)
             if self.busy_status:
-                self.logger.info(f'Received survival test singal {SURVIVAL[msg]} from overload, ' \
+                self.logger.info(f'Received survival test signal {SURVIVAL.__rdict__[msg]} from overlord, ' \
                                 f'reported tik time {self.time}, real up time {real_up_time},' \
                                 f'current completion rate {current_iter} / {max_iter}.')
             else:
-                self.logger.info(f'Received survival test singal {SURVIVAL[msg]} from overload, ' \
+                self.logger.info(f'Received survival test signal {SURVIVAL.__rdict__[msg]} from overlord, ' \
                                 f'reported tik time {self.time}, real up time {real_up_time},' \
                                 f'not working currently.')
                 
-            self.req_surv = self.comm.irecv(tag=1)
         return msg
 
     def receive_job(self):
         status, msg = self.req_adjm.test()
+        
+        self.logger.debug(f'Agent {self.rank} checking for job: status={status}, msg={msg}')
+
         if status:
+            self.req_adjm = self.comm.irecv(source=0, tag=TAGS.DATA_ADJ_MATRIX)
+
             try:
-                return self.prepare_job(msg)
-            except:
+                job = self.prepare_job(msg)
+                
+                return job
+            except Exception as e:
+                self.logger.error(f'Agent {self.rank} failed to prepare job from message: {msg}, error: {e}', exc_info=True)
+
                 self.req_adjm.Cancel();self.req_adjm.Free()
-                self.req_adjm = self.comm.irecv(source=0, tag=TAGS.DATA_ADJ_MATRIX)
+                # self.req_adjm = self.comm.irecv(source=0, tag=TAGS.DATA_ADJ_MATRIX)
                 self.comm.isend(self.rank, dest=0, tag=TAGS.INFO_ABNORMAL)
+
+                # TODO: process job failure here and outter
+                return None
         else:
+            self.logger.debug(f"No job received yet by agent {self.rank}. req_adjm: {self.req_adjm}")
             return None
 
     def report_estimation(self, return_dict):
@@ -92,51 +121,61 @@ class MPI_Agent(object):
         self.busy_status = False
         return
     
-    ################ DO JOB WITH TF ################
+    ################ DO JOB WITH QCTN ################
     def prepare_job(self, msg):
+        """
+        Prepare QCTN job from received message.
+        
+        Args:
+            msg: Dictionary containing:
+                - 'indv_scope': Individual identifier
+                - 'graph': Quantum circuit graph string
+                - 'max_iterations': Maximum optimization iterations
+        
+        Returns:
+            tuple: (qctn_example, max_iterations, optimizer_instance)
+        """
         indv_scope = msg['indv_scope']
-        adj_matrix = msg['adj_matrix']
+        graph = msg['graph']  # Quantum circuit graph string
         max_iterations = msg['max_iterations']
 
         self.busy_status = True
-        self.g = tf.Graph()
-        self.sess = tf.compat.v1.Session(graph=self.g)
+        
+        # Build and initialize QCTN from the graph
+        qctn_example = QCTN(graph)
+        
+        # Create optimizer instance
+        optimizer_instance = self.optimizer(**self.optimizer_param)
+        optimizer_instance.max_iter = max_iterations
+        
+        self.logger.info(f'Received job indv {indv_scope} from overlord, ' \
+                         f'qctn_example has {qctn_example.nqubits} qubits and {qctn_example.ncores} cores, '
+                         f'gonna run {max_iterations} iterations.')
 
-        with self.g.as_default():
-            with tf.compat.v1.variable_scope(indv_scope):
-                TN = TensorNetwork(adj_matrix)
-                # TODO TN need a proper initialization
-                output = TN.reduction(random=False)
-                goal = tf.convert_to_tensor(self.evoluation_goal)
-                goal_square_norm = tf.convert_to_tensor(np.mean(np.square(self.evoluation_goal)))
-                rse_loss = tf.reduce_mean(tf.square(output - goal)) / goal_square_norm
-                step = TN.opt_opeartions(self.optimizer(**self.optimizer_param), rse_loss)
-                var_list = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.GLOBAL_VARIABLES, scope=indv_scope)
-
-        self.sess.run(tf.compat.v1.variables_initializer(var_list))
-        self.logger.info(f'Received job indv {indv_scope} from overload, ' \
-                         f'gonna run {max_iterations}.')
-
-        return step, max_iterations, rse_loss
+        return qctn_example, max_iterations, optimizer_instance
     
-    def do_estimation(self, rse_loss, required_time):
-        loss = self.sess.run(rse_loss)
+    def do_estimation(self, qctn_example, required_time):
+        """Calculate current loss and estimate remaining time"""
+        loss, _ = qctn_example.contract_with_QCTN_for_gradient(self.qctn_target, engine=self.contraction_engine)
+        loss = float(loss)  # Convert JAX array to Python float
 
         return_dict = {
             'rank': self.rank,
             'loss': loss,
             'required_time': required_time,
         }
-        self.logger.info(f'Reporting estimiation time {required_time} with current loss {loss}.')
+        self.logger.info(f'Reporting estimation time {required_time} with current loss {loss}.')
 
         return return_dict
 
-    def prepare_report_reuslt(self, rse_loss, current_iter, reason):
-
-        loss = self.sess.run(rse_loss)
-        self.sess.close()
-        tf.reset_default_graph()
-        del repeat_loss, g
+    def prepare_report_result(self, qctn_example, current_iter, reason):
+        """Prepare final result report and clean up resources"""
+        
+        loss, _ = qctn_example.contract_with_QCTN_for_gradient(self.qctn_target, engine=self.contraction_engine)
+        loss = float(loss)  # Convert JAX array to Python float
+        
+        # Clean up QCTN resources
+        del qctn_example
         gc.collect()
 
         return_dict = {
@@ -149,9 +188,27 @@ class MPI_Agent(object):
 
         return return_dict
 
-    def evaluate(self, step, n_iter) -> None:
-        for i in range(n_iter): 
-            self.sess.run(step)
+    def evaluate(self, qctn_example, optimizer_instance, n_iter) -> None:
+        """
+        Execute optimization iterations.
+        
+        Args:
+            qctn_example: QCTN instance to optimize
+            optimizer_instance: Optimizer instance
+            n_iter: Number of iterations to run
+        """
+        for i in range(n_iter):
+            loss, grads = qctn_example.contract_with_QCTN_for_gradient(self.qctn_target, engine=self.contraction_engine)
+            
+            # Check convergence
+            if loss < optimizer_instance.tol:
+                self.logger.debug(f"Convergence achieved at iteration {optimizer_instance.iter} with loss {loss}.")
+                break
+            
+            # Update parameters using optimizer step
+            optimizer_instance.step(qctn_example, grads)
+            optimizer_instance.iter += 1
+            
         return 
 
     ################ ENTRANCE ################
@@ -185,11 +242,11 @@ class MPI_Agent(object):
 
         allow_waiting_after_timeout_rate = self.kwargs['agent_behavier']['allow_waiting_after_timeout_rate']
 
-        current_iter, job, step, max_iterations, rse_loss = None, None, None, None, None
+        current_iter, job, qctn_example, max_iterations, optimizer_instance = None, None, None, None, None
         while True:
             msg = self.report_surival(current_iter, max_iterations)
             if msg:
-                self.logger.info(f'Received single {SURVIVAL[msg]} from host, breaking from while loop.')
+                self.logger.info(f'Received signal {SURVIVAL.__rdict__[msg]} from host, breaking from while loop.')
                 break
 
             # waiting for job
@@ -199,36 +256,43 @@ class MPI_Agent(object):
                     self.tik(1)
                     continue
                 else:
-                    step, max_iterations, rse_loss = job
+                    qctn_example, max_iterations, optimizer_instance = job
                     self.busy_status = True
                     current_iter = 0
+
+            self.logger.debug(f'Agent {self.rank} entering evaluation loop at iteration {current_iter} / {max_iterations}.')
 
             # received job, everything is fine
             if current_iter < max_iterations:
 
                 if current_iter == estimation_iter:
                     required_time = (max_iterations / estimation_iter) * (time.time() - call_start_time)
-                    estimatation_report = self.do_estimation(rse_loss, required_time)
+                    estimatation_report = self.do_estimation(qctn_example, required_time)
                     self.report_estimation(estimatation_report)
 
                 # in time
                 if time.time() - call_start_time < timeout:
-                    self.evaluate(step, n_iter)
+                    self.evaluate(qctn_example, optimizer_instance, n_iter)
+                    current_iter += n_iter  # Update iteration counter
 
                 # timeout
                 else:
                     # wait until finish when it is bearable
                     if current_iter / max_iterations > allow_waiting_after_timeout_rate:
-                        self.evaluate(step, n_iter)
+                        self.evaluate(qctn_example, optimizer_instance, n_iter)
+                        current_iter += n_iter  # Update iteration counter
                     
                     # shutdown the computation
                     else:
-                        report = self.prepare_report_reuslt(rse_loss, current_iter, REASONS.HARD_TIMEOUT)
+                        report = self.prepare_report_result(qctn_example, current_iter, REASONS.HARD_TIMEOUT)
                         self.report_result(report)
+                        current_iter = max_iterations  # Mark as done to exit loop
             
             else:
-                report = self.prepare_report_reuslt(rse_loss, current_iter, REASONS.REACH_MAX_ITER)
+                report = self.prepare_report_result(qctn_example, current_iter, REASONS.REACH_MAX_ITER)
                 self.report_result(report)
+                current_iter = None  # Reset for next job
+                self.busy_status = False
 
         self.req_adjm.Cancel();self.req_adjm.Free()
         self.req_surv.Cancel();self.req_surv.Free()
