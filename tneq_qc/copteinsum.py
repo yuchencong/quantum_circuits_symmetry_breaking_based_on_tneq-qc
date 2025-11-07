@@ -5,6 +5,13 @@ import opt_einsum
 import jax
 import jax.numpy as jnp
 
+local_debug = True
+
+def local_print(*args, **kwargs):
+    """Print function that only prints when local_debug is True."""
+    if local_debug:
+        print(*args, **kwargs)
+
 class ContractorOptEinsum:
     """
     ContractorOptEinsum class for optimized tensor contraction using opt_einsum.
@@ -68,11 +75,11 @@ class ContractorOptEinsum:
         tensor_shapes = [cores_weights[core_name].shape for core_name in cores_name]
 
         for core_name in cores_name:
-            print(f'Core: {core_name}, Shape: {cores_weights[core_name].shape}')
+            local_print(f'Core: {core_name}, Shape: {cores_weights[core_name].shape}')
         
-        print(f'QCTN: {qctn.circuit}')
-        print(f'Einsum Equation: {einsum_equation}')
-        print(f'Tensor Shapes: {tensor_shapes}')
+        local_print(f'QCTN: {qctn.circuit}')
+        local_print(f'Einsum Equation: {einsum_equation}')
+        local_print(f'Tensor Shapes: {tensor_shapes}')
 
         qctn.einsum_expr = opt_einsum.contract_expression(einsum_equation, *tensor_shapes, optimize=Configuration.opt_einsum_optimize)
         jit_retraction = jax.jit(qctn.einsum_expr)
@@ -117,7 +124,7 @@ class ContractorOptEinsum:
         
         inputs_equation_lefthand = ''
         for idx, _ in enumerate(cores_name):
-            print(f"Processing core: {cores_name[idx]} with input ranks {input_ranks[idx]}, adjacency matrix {adjacency_matrix[idx, :]}, output ranks {output_ranks[idx]}")
+            local_print(f"Processing core: {cores_name[idx]} with input ranks {input_ranks[idx]}, adjacency matrix {adjacency_matrix[idx, :]}, output ranks {output_ranks[idx]}")
             for _ in input_ranks[idx]:
                 einsum_equation_lefthand += opt_einsum.get_symbol(symbol_id)
                 inputs_equation_lefthand += opt_einsum.get_symbol(symbol_id)
@@ -138,11 +145,11 @@ class ContractorOptEinsum:
         tensor_shapes = [inputs.shape] + [cores_weights[core_name].shape for core_name in cores_name]
 
         for core_name in cores_name:
-            print(f'Core: {core_name}, Shape: {cores_weights[core_name].shape}')
+            local_print(f'Core: {core_name}, Shape: {cores_weights[core_name].shape}')
         
-        print(f'QCTN: {qctn.circuit}')
-        print(f'Einsum Equation: {einsum_equation}')
-        print(f'Tensor Shapes: {tensor_shapes}')
+        local_print(f'QCTN: {qctn.circuit}')
+        local_print(f'Einsum Equation: {einsum_equation}')
+        local_print(f'Tensor Shapes: {tensor_shapes}')
 
         qctn.einsum_expr = opt_einsum.contract_expression(einsum_equation, *tensor_shapes, optimize=Configuration.opt_einsum_optimize)
         jit_retraction = jax.jit(qctn.einsum_expr)
@@ -188,7 +195,7 @@ class ContractorOptEinsum:
 
         inputs_equation_lefthand = ''
         for idx, _ in enumerate(cores_name):
-            print(f"Processing core: {cores_name[idx]} with input ranks {input_ranks[idx]}, adjacency matrix {adjacency_matrix[idx, :]}, output ranks {output_ranks[idx]}")
+            local_print(f"Processing core: {cores_name[idx]} with input ranks {input_ranks[idx]}, adjacency matrix {adjacency_matrix[idx, :]}, output ranks {output_ranks[idx]}")
             for _ in input_ranks[idx]:
                 einsum_equation_lefthand += opt_einsum.get_symbol(symbol_id)
                 inputs_equation_lefthand += opt_einsum.get_symbol(symbol_id)
@@ -210,11 +217,11 @@ class ContractorOptEinsum:
         tensor_shapes = [v.shape for v in inputs] + [cores_weights[core_name].shape for core_name in cores_name]
 
         for core_name in cores_name:
-            print(f'Core: {core_name}, Shape: {cores_weights[core_name].shape}')
+            local_print(f'Core: {core_name}, Shape: {cores_weights[core_name].shape}')
         
-        print(f'QCTN: {qctn.circuit}')
-        print(f'Einsum Equation: {einsum_equation}')
-        print(f'Tensor Shapes: {tensor_shapes}')
+        local_print(f'QCTN: {qctn.circuit}')
+        local_print(f'Einsum Equation: {einsum_equation}')
+        local_print(f'Tensor Shapes: {tensor_shapes}')
 
         qctn.einsum_expr = opt_einsum.contract_expression(einsum_equation, *tensor_shapes, optimize=Configuration.opt_einsum_optimize)
         jit_retraction = jax.jit(qctn.einsum_expr)
@@ -237,6 +244,8 @@ class ContractorOptEinsum:
             jnp.ndarray: The result of the tensor contraction.
         """
 
+        # print("ContractorOptEinsum.contract_with_QCTN called")
+
         input_ranks, adjacency_matrix, output_ranks = qctn.circuit
         cores_name = qctn.cores
         cores_weights = qctn.cores_weights
@@ -250,7 +259,8 @@ class ContractorOptEinsum:
         target_einsum_equation_lefthand = ''
 
         adjacency_matrix_for_interaction = adjacency_matrix.copy()
-
+        local_print(f'adjacency_matrix for interaction: \n{adjacency_matrix_for_interaction}')
+        
         from .tenmul_qc import QCTNHelper
         for element in QCTNHelper.jax_triu_ndindex(len(cores_name)):
             i, j = element
@@ -262,6 +272,8 @@ class ContractorOptEinsum:
                 adjacency_matrix[i, j] = connection_symbols
                 adjacency_matrix[j, i] = connection_symbols  # Ensure symmetry
 
+        local_print(f"adjacency_matrix after symbol assignment: \n{adjacency_matrix}")
+
         target_adjacency_matrix_for_interaction = target_adjacency_matrix.copy()
         for element in QCTNHelper.jax_triu_ndindex(len(target_cores_name)):
             i, j = element
@@ -272,6 +284,8 @@ class ContractorOptEinsum:
                 symbol_id += connection_num
                 target_adjacency_matrix[i, j] = connection_symbols
                 target_adjacency_matrix[j, i] = connection_symbols
+
+        local_print(f"target_adjacency_matrix after symbol assignment: \n{target_adjacency_matrix}")
 
         input_symbols_stack = []
         output_symbols_stack = []
@@ -294,6 +308,9 @@ class ContractorOptEinsum:
             
             einsum_equation_lefthand += ','
         
+        local_print(f'input_symbols_stack after source QCTN processing: {input_symbols_stack}')
+        local_print(f'output_symbols_stack after source QCTN processing: {output_symbols_stack}')
+
         # target.einsum_equation_lefthand
         for idx, _ in enumerate(target_cores_name):
             for _ in target_input_ranks[idx]:
@@ -313,18 +330,20 @@ class ContractorOptEinsum:
 
 
         for core_name in cores_name:
-            print(f'Core: {core_name}, Shape: {cores_weights[core_name].shape}')
+            local_print(f'Core: {core_name}, Shape: {cores_weights[core_name].shape}')
 
         for core_name in target_cores_name:
-            print(f'Target Core: {core_name}, Shape: {target_cores_weights[core_name].shape}')
+            local_print(f'Target Core: {core_name}, Shape: {target_cores_weights[core_name].shape}')
         
-        print(f'QCTN: {qctn.circuit}')
-        print(f'Target QCTN: {target_qctn.circuit}')
-        print(f'Einsum Equation: {einsum_equation}')
-        print(f'Tensor Shapes: {tensor_shapes}')
+        local_print(f'QCTN: {qctn.circuit}')
+        local_print(f'Target QCTN: {target_qctn.circuit}')
+        local_print(f'Einsum Equation: {einsum_equation}')
+        local_print(f'Tensor Shapes: {tensor_shapes}')
 
         qctn.einsum_expr = opt_einsum.contract_expression(einsum_equation, *tensor_shapes, optimize=Configuration.opt_einsum_optimize)
         jit_retraction = jax.jit(qctn.einsum_expr)
+
+        local_print(f'qctn.einsum_expr: {qctn.einsum_expr is None}')
 
         if initialization_mode:
             # In initialization mode, we do not actually contract the target QCTN
@@ -334,6 +353,8 @@ class ContractorOptEinsum:
                        [target_cores_weights[core_name] for core_name in target_cores_name]
         
         retracted_QCTN = jit_retraction(*inputs_cores)
+
+        local_print(f"retracted_QCTN: {retracted_QCTN}")
 
         return retracted_QCTN
 
@@ -355,13 +376,22 @@ class ContractorOptEinsum:
             retracted_QCTN = qctn.einsum_expr(*inputs_cores)
             return jnp.mean((retracted_QCTN - 1.0) ** 2) 
 
+        # print(f'ContractorOptEinsum.contract_with_QCTN_for_gradient called {qctn.einsum_expr is None}')
+
         if qctn.einsum_expr is None:
+            # print("contract with QCTN")
+            
             ContractorOptEinsum.contract_with_QCTN(qctn, target_qctn, initialization_mode=True)
             argnums = list(range(len(cores_name)))
+
+            # print(f'argnums: {argnums}')
+
             qctn.jit_retraction_with_QCTN_value_gradient = jax.jit(jax.value_and_grad(mse_loss_fn, 
                                                                                       argnums=argnums))
 
+        # print(f"qctn.jit_retraction_with_QCTN_value_gradient: {qctn.jit_retraction_with_QCTN_value_gradient is None}")
+
         loss, grad_cores = qctn.jit_retraction_with_QCTN_value_gradient(*inputs_cores)
-        print(f'Loss: {loss}')
+        local_print(f'Loss: {loss}')
 
         return loss, grad_cores
