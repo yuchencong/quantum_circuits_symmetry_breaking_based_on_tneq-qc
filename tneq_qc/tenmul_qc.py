@@ -39,11 +39,39 @@ class QCTNHelper:
                     "-2-----B-6-----D-----2-\n" \
                     "-2-A-3-----C-8-D-----2-"
         else:
+            return  "-2-A-2-"
+        
+            return  "-2-A-2-\n" \
+                    "-2-A-2-"
+        
+            return  "-2-A-------------------2-\n" \
+                    "-2-A--2--B-------------2-\n" \
+                    "-2-------B--2--C-------2-\n" \
+                    "-2-------------C--2--D-2-\n" \
+                    "-2-------------------D-2-"
+
+            # return  "-2-A-----------------------------------------A-2-\n" \
+            #         "-2-A--2--B-----------------------------B--2--A-2-\n" \
+            #         "-2-------B--2--C-----------------C--2--B-------2-\n" \
+            #         "-2-------------C--2--D-----D--2--C-------------2-\n" \
+            #         "-2-------------------D--2--D-------------------2-"
+
             return  "-2-----B-5-C-3-D-----2-\n" \
                     "-2-A-4---------D-----2-\n" \
                     "-2-A-4-B-7-C-2-D-4-E-2-\n" \
                     "-2-A-3-B-6---------E-2-\n" \
                     "-2---------C-8-----E-2-"
+            """
+            -2-A-------------------2-
+            -2-A--2--B-------------2-
+            -2-------B--2--C-------2-
+            -2-------------C--2--D-2-
+            -2-------------------D-2-
+            """
+            
+
+
+
 
     @staticmethod
     def generate_example_graph2():
@@ -369,13 +397,84 @@ class QCTN:
         if attach is None:
             return self._contract_core_only(engine)
         elif isinstance(attach, jnp.ndarray):
+            print('contract with jnp.ndarray')
             return self._contract_with_inputs(attach, engine)
         elif isinstance(attach, list):
+            print('contract with list of jnp.ndarray')
             return self._contract_with_vector_inputs(attach, engine)
         elif isinstance(attach, QCTN):
+            print('contract with QCTN')
             return self._contract_with_QCTN(attach, engine)
         else:
             raise TypeError("attach must be a jnp.ndarray, a list of jnp.ndarray or an instance of QCTN.")
+    
+    def _contract_with_self(self, engine=ContractorOptEinsum, circuit_array_input=None, circuit_list_input=None):
+        """
+        Contract the quantum circuit tensor network with itself.
+
+        Args:
+            engine (ContractorOptEinsum): The contraction engine to use. Default is ContractorOptEinsum.
+
+        Returns:
+            The result of the contraction operation.
+        """
+
+        return engine.contract_with_self(self, circuit_array_input, circuit_list_input)
+
+    def _contract_with_self_for_gradient(self, engine=ContractorOptEinsum, circuit_array_input=None, circuit_list_input=None):
+        """
+        Contract the quantum circuit tensor network with itself.
+
+        Args:
+            engine (ContractorOptEinsum): The contraction engine to use. Default is ContractorOptEinsum.
+
+        Returns:
+            The result of the contraction operation.
+        """
+
+        return engine.contract_with_self_for_gradient(self, circuit_array_input, circuit_list_input)
+
+    def contract_with_self(self, attach: Union[jnp.ndarray, 'QCTN', list] = None, engine=ContractorOptEinsum):
+        """
+        Contract the quantum circuit tensor network with itself.
+
+        Args:
+            engine (ContractorOptEinsum): The contraction engine to use. Default is ContractorOptEinsum.
+
+        Returns:
+            The result of the contraction operation.
+        """
+        if attach is None:
+            return self._contract_with_self(engine)
+        elif isinstance(attach, jnp.ndarray):
+            return self._contract_with_self(engine, circuit_array_input=attach)
+        elif isinstance(attach, list):
+            raise TypeError("attach must be None when contracting with self.")
+        elif isinstance(attach, QCTN):
+            raise TypeError("attach must be None when contracting with self.")
+        else:
+            raise TypeError("attach must be None when contracting with self.")
+    
+    def contract_with_self_for_gradient(self, attach: Union[jnp.ndarray, 'QCTN', list] = None, engine=ContractorOptEinsum):
+        """
+        Contract the quantum circuit tensor network with itself.
+
+        Args:
+            engine (ContractorOptEinsum): The contraction engine to use. Default is ContractorOptEinsum.
+
+        Returns:
+            The result of the contraction operation.
+        """
+        if attach is None:
+            return self._contract_with_self_for_gradient(engine)
+        elif isinstance(attach, jnp.ndarray):
+            return self._contract_with_self_for_gradient(engine, circuit_array_input=attach)
+        elif isinstance(attach, list):
+            raise TypeError("attach must be None when contracting with self.")
+        elif isinstance(attach, QCTN):
+            raise TypeError("attach must be None when contracting with self.")
+        else:
+            raise TypeError("attach must be None when contracting with self.")
 
     def contract_with_QCTN_for_gradient(self, attach, engine=ContractorOptEinsum):
         """

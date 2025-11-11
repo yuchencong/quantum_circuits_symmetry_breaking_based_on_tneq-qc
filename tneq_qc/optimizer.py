@@ -1,3 +1,4 @@
+import random
 import jax
 import jax.numpy as jnp
 
@@ -40,6 +41,37 @@ class Optimizer:
 
         while self.iter < self.max_iter:
             loss, grads = qctn.contract_with_QCTN_for_gradient(target_qctn)
+            if loss < self.tol:
+                print(f"Convergence achieved at iteration {self.iter} with loss {loss}.")
+                break
+
+            # Update parameters using the optimizer step
+            qctn.params = self.step(qctn, grads)
+            self.iter += 1
+        else:
+            print(f"Maximum iterations reached: {self.max_iter} with final loss {loss}.")
+
+    def optimize_self_with_inputs(self, qctn, inputs_list):
+        """
+        Optimize a function using JAX with self-contraction and given inputs.
+        
+        Args:
+            qctn (QCTN): The quantum circuit tensor network to optimize.
+            inputs_list (list): List of input arrays for the contraction.
+
+        Returns:
+            None: The function modifies the qctn in place.
+        """
+
+        input_index_list = list(range(len(inputs_list)))
+        # shuffle input_index_list
+        train_index_list = random.sample(input_index_list, len(input_index_list))
+        print(f"train_index_list : {train_index_list}")
+
+        while self.iter < self.max_iter:
+            inputs = inputs_list[train_index_list[self.iter % len(inputs_list)]]
+
+            loss, grads = qctn.contract_with_self_for_gradient(inputs)
             if loss < self.tol:
                 print(f"Convergence achieved at iteration {self.iter} with loss {loss}.")
                 break

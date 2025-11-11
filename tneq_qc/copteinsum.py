@@ -100,9 +100,17 @@ class ContractorOptEinsum:
             jnp.ndarray: The result of the tensor contraction.
         """
 
+        local_print(f'ContractorOptEinsum.contract_with_inputs called with inputs shape: {inputs.shape}')
+
         input_ranks, adjacency_matrix, output_ranks = qctn.circuit
         cores_name = qctn.cores
         cores_weights = qctn.cores_weights
+
+        local_print(f'ContractorOptEinsum.contract_with_inputs called with cores_weights shapes: {[w.shape for w in cores_weights.values()]}')
+        local_print(f'ContractorOptEinsum.contract_with_inputs called with input_ranks: {input_ranks}')
+        local_print(f'ContractorOptEinsum.contract_with_inputs called with output_ranks: {output_ranks}')
+        local_print(f'ContractorOptEinsum.contract_with_inputs called with adjacency_matrix: {adjacency_matrix}')
+        local_print(f'ContractorOptEinsum.contract_with_inputs called with cores_name: {cores_name}')
 
         symbol_id = 0
         einsum_equation_lefthand = ''
@@ -357,6 +365,189 @@ class ContractorOptEinsum:
         local_print(f"retracted_QCTN: {retracted_QCTN}")
 
         return retracted_QCTN
+    
+    @staticmethod
+    def contract_with_self(qctn, circuit_array_input=None, circuit_list_input=None,  initialization_mode=False):
+        """
+        Contract the given QCTN with itself.
+        
+        Args:
+            qctn (QCTN): The quantum circuit tensor network to contract.
+        
+        Returns:
+            jnp.ndarray: The result of the tensor contraction.
+        """
+
+        input_ranks, adjacency_matrix, output_ranks = qctn.circuit
+        cores_name = qctn.cores
+        cores_weights = qctn.cores_weights
+
+        symbol_id = 0
+        einsum_equation_lefthand = ''
+
+        adjacency_matrix_for_interaction = adjacency_matrix.copy()
+        local_print(f'adjacency_matrix for interaction: \n{adjacency_matrix_for_interaction}')
+        
+        from .tenmul_qc import QCTNHelper
+        for element in QCTNHelper.jax_triu_ndindex(len(cores_name)):
+            i, j = element
+            if adjacency_matrix_for_interaction[i, j]:
+                # If there is a connection between core i and core j
+                connection_num = len(adjacency_matrix[i, j])
+                connection_symbols = [opt_einsum.get_symbol(symbol_id + k) for k in range(connection_num)]
+                symbol_id += connection_num
+                adjacency_matrix[i, j] = connection_symbols
+                adjacency_matrix[j, i] = connection_symbols  # Ensure symmetry
+
+        local_print(f"adjacency_matrix after symbol assignment: \n{adjacency_matrix}")
+
+        input_symbols_stack = []
+        output_symbols_stack = []
+
+        equation_list = []
+        new_symbol_mapping = {}
+
+        # self.einsum_equation_lefthand
+        for idx, _ in enumerate(cores_name):
+            core_equation = ""
+
+            for _ in input_ranks[idx]:
+                symbol = opt_einsum.get_symbol(symbol_id)
+                core_equation += symbol
+                input_symbols_stack.append(symbol)
+                symbol_id += 1
+
+            core_equation += "".join(list(itertools.chain.from_iterable(adjacency_matrix[idx])))
+
+            for _ in output_ranks[idx]:
+                symbol = opt_einsum.get_symbol(symbol_id)
+                core_equation += symbol
+                output_symbols_stack.append(symbol)
+                symbol_id += 1
+            
+            einsum_equation_lefthand += core_equation
+            equation_list.append(core_equation)
+
+        real_output_symbols_stack = []
+
+        inv_equation_list = []
+        for core_equation in equation_list[::-1]:
+            new_equation = ""
+            for char in core_equation:
+                if char in output_symbols_stack:
+                    new_equation += char
+                else:
+                    if char in new_symbol_mapping:
+                        symbol = new_symbol_mapping[char]
+                    else:
+                        symbol = opt_einsum.get_symbol(symbol_id)
+                        symbol_id += 1
+                        new_symbol_mapping[char] = symbol
+
+                        if char in input_symbols_stack:
+                            real_output_symbols_stack.append(symbol)
+
+                    new_equation += symbol
+
+            inv_equation_list.append(new_equation)
+
+        equation_list = equation_list + inv_equation_list
+
+        einsum_equation_lefthand = ",".join(equation_list)
+
+        local_print(f'einsum_equation_lefthand: {einsum_equation_lefthand}')
+        local_print(f'input_symbols_stack after source QCTN processing: {input_symbols_stack}')
+        local_print(f'output_symbols_stack after source QCTN processing: {output_symbols_stack}')
+
+        if circuit_array_input is not None:
+            local_print(f"check circuit_array_input shape: {circuit_array_input.shape}, expected input_ranks: {input_ranks}")
+            # TODO: correct this code, check the circuit_array_input shape
+            # for idx, core_name in enumerate(cores_name):
+            #     expected_input_rank = len(input_ranks[idx])
+            #     if circuit_array_input[idx].ndim != expected_input_rank:
+            #         raise ValueError(f'circuit_array_input[{idx}] has shape {circuit_array_input[idx].shape}, expected input rank {expected_input_rank}')
+            
+            einsum_equation_lefthand = f"{''.join(input_symbols_stack)},{einsum_equation_lefthand},{''.join(real_output_symbols_stack)}"
+
+        einsum_equation = f'{einsum_equation_lefthand}->'
+
+        tensor_shapes = [cores_weights[core_name].shape for core_name in cores_name] + \
+                        [cores_weights[core_name].shape for core_name in cores_name[::-1]]
+
+        if circuit_array_input is not None:
+            tensor_shapes = [circuit_array_input.shape] + tensor_shapes + [circuit_array_input.shape]
+
+        for core_name in cores_name:
+            local_print(f'Core: {core_name}, Shape: {cores_weights[core_name].shape}')
+
+        local_print(f'QCTN: {qctn.circuit}')
+        local_print(f'Einsum Equation: {einsum_equation}')
+        local_print(f'Tensor Shapes: {tensor_shapes}')
+
+        qctn.einsum_expr = opt_einsum.contract_expression(einsum_equation, *tensor_shapes, optimize=Configuration.opt_einsum_optimize)
+        jit_retraction = jax.jit(qctn.einsum_expr)
+
+        local_print(f'qctn.einsum_expr: {qctn.einsum_expr is None}')
+
+        if initialization_mode:
+            # In initialization mode, we do not actually contract the target QCTN
+            return qctn.einsum_expr
+
+        inputs_cores =  [cores_weights[core_name] for core_name in cores_name] + \
+                        [cores_weights[core_name] for core_name in cores_name[::-1]]  
+        
+        if circuit_array_input is not None:
+            inputs_cores = [circuit_array_input] + inputs_cores + [circuit_array_input]
+
+
+        retracted_QCTN = jit_retraction(*inputs_cores)
+
+        local_print(f"retracted_QCTN: {retracted_QCTN}")
+
+        return retracted_QCTN
+
+    @staticmethod
+    def contract_with_self_for_gradient(qctn, circuit_array_input=None, circuit_list_input=None):
+        """
+        We use JAX's autograd to compute the core gradient.
+        """
+
+        cores_name = qctn.cores
+        cores_weights = qctn.cores_weights
+
+        if qctn.einsum_expr is None:
+            print('cores_weights', cores_weights)
+            cores_weights['A'] = jnp.array([[0, -1], [1, 0]])
+
+        inputs_cores =  [cores_weights[core_name] for core_name in cores_name] + \
+                        [cores_weights[core_name] for core_name in cores_name[::-1]]
+        if circuit_array_input is not None:
+            inputs_cores = [circuit_array_input] + inputs_cores + [circuit_array_input]
+
+        def mse_loss_fn(*inputs_cores):
+            retracted_QCTN = qctn.einsum_expr(*inputs_cores)
+            return jnp.mean((retracted_QCTN - 1.0) ** 2) 
+
+        # print(f'ContractorOptEinsum.contract_with_QCTN_for_gradient called {qctn.einsum_expr is None}')
+
+        if qctn.einsum_expr is None:
+            ContractorOptEinsum.contract_with_self(qctn, circuit_array_input=circuit_array_input, initialization_mode=True)
+            argnums = list(range(len(cores_name)))
+
+            qctn.jit_retraction_with_self_value_gradient = jax.jit(jax.value_and_grad(mse_loss_fn, 
+                                                                                      argnums=argnums))
+
+        loss, grad_cores = qctn.jit_retraction_with_self_value_gradient(*inputs_cores)
+        
+        local_print('inputs_cores', [x.shape for x in inputs_cores])
+        local_print('mean', [x.mean() for x in inputs_cores])
+        local_print('var', [x.var() for x in inputs_cores])
+
+        local_print(f'Loss: {loss}')
+        
+        local_print(f"-"*70)
+
+        return loss, grad_cores
 
     @staticmethod
     def contract_with_QCTN_for_gradient(qctn, target_qctn):
@@ -391,7 +582,26 @@ class ContractorOptEinsum:
 
         # print(f"qctn.jit_retraction_with_QCTN_value_gradient: {qctn.jit_retraction_with_QCTN_value_gradient is None}")
 
+        # print('inputs_cores', inputs_cores, len(inputs_cores))
+        # print('inputs_cores', [x.shape for x in inputs_cores])
+
+        local_print(f"-"*70)
+
+        local_print('inputs_cores', [x.shape for x in inputs_cores])
+        local_print('mean', [x.mean() for x in inputs_cores])
+        local_print('var', [x.var() for x in inputs_cores])
+
+        # local_print(f"-"*70)
+
         loss, grad_cores = qctn.jit_retraction_with_QCTN_value_gradient(*inputs_cores)
+        
+        # local_print('inputs_cores', [x.shape for x in inputs_cores])
+        # local_print('mean', [x.mean() for x in inputs_cores])
+        # local_print('var', [x.var() for x in inputs_cores])
+
+        # local_print(f"-"*70)
+
         local_print(f'Loss: {loss}')
+        
 
         return loss, grad_cores
