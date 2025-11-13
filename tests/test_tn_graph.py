@@ -2,7 +2,7 @@
 Test the new features of TNGraph class.
 """
 
-from tneq_qc.tn_graph import TNGraph
+from tneq_qc.core.tn_graph import TNGraph
 
 
 print("=" * 70)

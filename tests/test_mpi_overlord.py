@@ -18,9 +18,9 @@ from mpi4py import MPI
 if __package__ is None or __package__ == '':
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tneq_qc.mpi_overlord import MPI_Overlord
-from tneq_qc.mpi_agent import MPI_Agent
-from tneq_qc.tenmul_qc import QCTN, QCTNHelper
+from tneq_qc.distributed.mpi_overlord import MPI_Overlord
+from tneq_qc.distributed.mpi_agent import MPI_Agent
+from tneq_qc.core.tenmul_qc import QCTN, QCTNHelper
 from tneq_qc.log_utils import setup_colored_logger
 
 

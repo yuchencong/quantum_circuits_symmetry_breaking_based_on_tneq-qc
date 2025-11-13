@@ -2,10 +2,10 @@ from typing import Any
 import numpy as np, os, sys, time, gc
 import logging
 from mpi4py import MPI
-from tneq_qc.mpi_agent import MPI_Agent
-from tneq_qc.mpi_core import TAGS, REASONS, SURVIVAL
-from tneq_qc.tenmul_qc import QCTNHelper, QCTN
-from tneq_qc.optimizer import Optimizer
+from tneq_qc.distributed.mpi_agent import MPI_Agent
+from tneq_qc.distributed.mpi_core import TAGS, REASONS, SURVIVAL
+from tneq_qc.core.tenmul_qc import QCTNHelper, QCTN
+from tneq_qc.optim.optimizer import Optimizer
 from tneq_qc.log_utils import setup_colored_logger
 
 

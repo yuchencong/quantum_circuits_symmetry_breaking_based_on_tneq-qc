@@ -4,8 +4,8 @@ import jax.numpy as jnp
 import itertools
 import re, random
 from typing import Union
-from .config import Configuration
-from .copteinsum import ContractorOptEinsum
+from ..config import Configuration
+from ..backends.copteinsum import ContractorOptEinsum
 
 class QCTNHelper:
     """

@@ -2,9 +2,9 @@ from typing import Any, Callable
 import numpy as np
 import random, string, os
 from .evolve import EVOLVE_OPS, FITNESS_FUNCS
-from .callbacks import CALLBACKS, LOG_FORMATER
-from .mpi_core import REASONS, INDIVIDUAL_STATUS
-from .tn_graph import TNGraph
+from ..callbacks import CALLBACKS, LOG_FORMATER
+from ..distributed.mpi_core import REASONS, INDIVIDUAL_STATUS
+from ..core.tn_graph import TNGraph
 import itertools
 from dataclasses import dataclass, field
 

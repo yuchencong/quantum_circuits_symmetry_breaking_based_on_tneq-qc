@@ -3,9 +3,9 @@ import time
 import mpi4py
 import numpy as np
 import functools, itertools
-from .mpi_generation import Generation, Individual
+from ..genetic.mpi_generation import Generation, Individual
 from .mpi_core import TAGS, REASONS, DUMMYFUNC, AGENT_STATUS, SURVIVAL
-from .callbacks import CALLBACKS
+from ..callbacks import CALLBACKS
 from collections import deque
 
 class MPI_Overlord():
