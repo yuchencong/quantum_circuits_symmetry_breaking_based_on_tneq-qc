@@ -2,8 +2,8 @@ from __future__ import annotations
 from ..config import Configuration
 import itertools
 import opt_einsum
-import jax
-import jax.numpy as jnp
+import torch
+import torch.nn.functional as F
 
 local_debug = True
 
@@ -12,15 +12,14 @@ def local_print(*args, **kwargs):
     if local_debug:
         print(*args, **kwargs)
 
-class ContractorOptEinsum:
+class ContractorPyTorch:
     """
-    ContractorOptEinsum class for optimized tensor contraction using opt_einsum.
+    ContractorPyTorch class for optimized tensor contraction using PyTorch.
     
-    This class provides methods to contract tensors using the opt_einsum library,
-    which is optimized for performance and memory efficiency.
+    This class provides methods to contract tensors using PyTorch's einsum,
+    with automatic differentiation support for gradient-based optimization.
     """
 
-    # tenmul_qc.py
     @staticmethod
     def contract_core_only(qctn):
         """
@@ -30,7 +29,7 @@ class ContractorOptEinsum:
             qctn (QCTN): The quantum circuit tensor network to contract.
         
         Returns:
-            jnp.ndarray: The result of the tensor contraction.
+            torch.Tensor: The result of the tensor contraction.
         """
 
         input_ranks, adjacency_matrix, output_ranks = qctn.circuit
@@ -72,18 +71,21 @@ class ContractorOptEinsum:
         einsum_equation_lefthand = einsum_equation_lefthand[:-1]  # Remove the last comma
         einsum_equation = f'{einsum_equation_lefthand}->{einsum_equation_righthand}'
 
-        tensor_shapes = [cores_weights[core_name].shape for core_name in cores_name]
-
         for core_name in cores_name:
             local_print(f'Core: {core_name}, Shape: {cores_weights[core_name].shape}')
         
         local_print(f'QCTN: {qctn.circuit}')
         local_print(f'Einsum Equation: {einsum_equation}')
-        local_print(f'Tensor Shapes: {tensor_shapes}')
 
-        qctn.einsum_expr = opt_einsum.contract_expression(einsum_equation, *tensor_shapes, optimize=Configuration.opt_einsum_optimize)
-        jit_retraction = jax.jit(qctn.einsum_expr)
-        retracted_QCTN = jit_retraction(*[cores_weights[core_name] for core_name in cores_name])
+        # Convert weights to PyTorch tensors if needed
+        torch_weights = []
+        for core_name in cores_name:
+            weight = cores_weights[core_name]
+            if not isinstance(weight, torch.Tensor):
+                weight = torch.from_numpy(weight).float()
+            torch_weights.append(weight)
+
+        retracted_QCTN = torch.einsum(einsum_equation, *torch_weights)
 
         return retracted_QCTN
     
@@ -94,23 +96,17 @@ class ContractorOptEinsum:
         
         Args:
             qctn (QCTN): The quantum circuit tensor network to contract.
-            inputs (jnp.ndarray): The inputs for the contraction operation.
+            inputs (torch.Tensor): The inputs for the contraction operation.
         
         Returns:
-            jnp.ndarray: The result of the tensor contraction.
+            torch.Tensor: The result of the tensor contraction.
         """
 
-        local_print(f'ContractorOptEinsum.contract_with_inputs called with inputs shape: {inputs.shape}')
+        local_print(f'ContractorPyTorch.contract_with_inputs called with inputs shape: {inputs.shape}')
 
         input_ranks, adjacency_matrix, output_ranks = qctn.circuit
         cores_name = qctn.cores
         cores_weights = qctn.cores_weights
-
-        local_print(f'ContractorOptEinsum.contract_with_inputs called with cores_weights shapes: {[w.shape for w in cores_weights.values()]}')
-        local_print(f'ContractorOptEinsum.contract_with_inputs called with input_ranks: {input_ranks}')
-        local_print(f'ContractorOptEinsum.contract_with_inputs called with output_ranks: {output_ranks}')
-        local_print(f'ContractorOptEinsum.contract_with_inputs called with adjacency_matrix: {adjacency_matrix}')
-        local_print(f'ContractorOptEinsum.contract_with_inputs called with cores_name: {cores_name}')
 
         symbol_id = 0
         einsum_equation_lefthand = ''
@@ -150,20 +146,24 @@ class ContractorOptEinsum:
         einsum_equation_lefthand = f'{inputs_equation_lefthand},{einsum_equation_lefthand[:-1]}'
         einsum_equation = f'{einsum_equation_lefthand}->{einsum_equation_righthand}'
 
-        tensor_shapes = [inputs.shape] + [cores_weights[core_name].shape for core_name in cores_name]
-
         for core_name in cores_name:
             local_print(f'Core: {core_name}, Shape: {cores_weights[core_name].shape}')
         
         local_print(f'QCTN: {qctn.circuit}')
         local_print(f'Einsum Equation: {einsum_equation}')
-        local_print(f'Tensor Shapes: {tensor_shapes}')
 
-        qctn.einsum_expr = opt_einsum.contract_expression(einsum_equation, *tensor_shapes, optimize=Configuration.opt_einsum_optimize)
-        jit_retraction = jax.jit(qctn.einsum_expr)
+        # Convert to PyTorch tensors if needed
+        if not isinstance(inputs, torch.Tensor):
+            inputs = torch.from_numpy(inputs).float()
+        
+        torch_weights = [inputs]
+        for core_name in cores_name:
+            weight = cores_weights[core_name]
+            if not isinstance(weight, torch.Tensor):
+                weight = torch.from_numpy(weight).float()
+            torch_weights.append(weight)
 
-        inputs_cores = [inputs] + [cores_weights[core_name] for core_name in cores_name]
-        retracted_QCTN = jit_retraction(*inputs_cores)
+        retracted_QCTN = torch.einsum(einsum_equation, *torch_weights)
 
         return retracted_QCTN
     
@@ -174,10 +174,10 @@ class ContractorOptEinsum:
         
         Args:
             qctn (QCTN): The quantum circuit tensor network to contract.
-            inputs (list[jnp.ndarray]): The vector inputs for the contraction operation.
+            inputs (list[torch.Tensor]): The vector inputs for the contraction operation.
 
         Returns:
-            jnp.ndarray: The result of the tensor contraction.
+            torch.Tensor: The result of the tensor contraction.
         """
 
         input_ranks, adjacency_matrix, output_ranks = qctn.circuit
@@ -222,25 +222,31 @@ class ContractorOptEinsum:
         einsum_equation_lefthand = f'{inputs_equation_lefthand}{einsum_equation_lefthand[:-1]}'
         einsum_equation = f'{einsum_equation_lefthand}->{einsum_equation_righthand}'
 
-        tensor_shapes = [v.shape for v in inputs] + [cores_weights[core_name].shape for core_name in cores_name]
-
         for core_name in cores_name:
             local_print(f'Core: {core_name}, Shape: {cores_weights[core_name].shape}')
         
         local_print(f'QCTN: {qctn.circuit}')
         local_print(f'Einsum Equation: {einsum_equation}')
-        local_print(f'Tensor Shapes: {tensor_shapes}')
 
-        qctn.einsum_expr = opt_einsum.contract_expression(einsum_equation, *tensor_shapes, optimize=Configuration.opt_einsum_optimize)
-        jit_retraction = jax.jit(qctn.einsum_expr)
+        # Convert to PyTorch tensors
+        torch_inputs = []
+        for v in inputs:
+            if not isinstance(v, torch.Tensor):
+                v = torch.from_numpy(v).float()
+            torch_inputs.append(v)
+        
+        for core_name in cores_name:
+            weight = cores_weights[core_name]
+            if not isinstance(weight, torch.Tensor):
+                weight = torch.from_numpy(weight).float()
+            torch_inputs.append(weight)
 
-        inputs_cores = inputs + [cores_weights[core_name] for core_name in cores_name]
-        retracted_QCTN = jit_retraction(*inputs_cores)
+        retracted_QCTN = torch.einsum(einsum_equation, *torch_inputs)
 
         return retracted_QCTN
     
     @staticmethod
-    def contract_with_QCTN(qctn, target_qctn, initialization_mode=False):
+    def contract_with_QCTN(qctn, target_qctn):
         """
         Contract the given QCTN with a target QCTN.
         
@@ -249,10 +255,10 @@ class ContractorOptEinsum:
             target_qctn (QCTN): The target quantum circuit tensor network for contraction.
         
         Returns:
-            jnp.ndarray: The result of the tensor contraction.
+            torch.Tensor: The result of the tensor contraction.
         """
 
-        # print("ContractorOptEinsum.contract_with_QCTN called")
+        local_print("ContractorPyTorch.contract_with_QCTN called")
 
         input_ranks, adjacency_matrix, output_ranks = qctn.circuit
         cores_name = qctn.cores
@@ -333,10 +339,6 @@ class ContractorOptEinsum:
 
         einsum_equation = f'{einsum_equation_lefthand}{target_einsum_equation_lefthand[:-1]}->'
 
-        tensor_shapes = [cores_weights[core_name].shape for core_name in cores_name] + \
-                        [target_cores_weights[core_name].shape for core_name in target_cores_name]
-
-
         for core_name in cores_name:
             local_print(f'Core: {core_name}, Shape: {cores_weights[core_name].shape}')
 
@@ -346,38 +348,39 @@ class ContractorOptEinsum:
         local_print(f'QCTN: {qctn.circuit}')
         local_print(f'Target QCTN: {target_qctn.circuit}')
         local_print(f'Einsum Equation: {einsum_equation}')
-        local_print(f'Tensor Shapes: {tensor_shapes}')
 
-        qctn.einsum_expr = opt_einsum.contract_expression(einsum_equation, *tensor_shapes, optimize=Configuration.opt_einsum_optimize)
-        jit_retraction = jax.jit(qctn.einsum_expr)
-
-        local_print(f'qctn.einsum_expr: {qctn.einsum_expr is None}')
-
-        if initialization_mode:
-            # In initialization mode, we do not actually contract the target QCTN
-            return qctn.einsum_expr
-
-        inputs_cores = [cores_weights[core_name] for core_name in cores_name] + \
-                       [target_cores_weights[core_name] for core_name in target_cores_name]
+        # Convert to PyTorch tensors
+        torch_tensors = []
+        for core_name in cores_name:
+            weight = cores_weights[core_name]
+            if not isinstance(weight, torch.Tensor):
+                weight = torch.from_numpy(weight).float()
+            torch_tensors.append(weight)
         
-        retracted_QCTN = jit_retraction(*inputs_cores)
+        for core_name in target_cores_name:
+            weight = target_cores_weights[core_name]
+            if not isinstance(weight, torch.Tensor):
+                weight = torch.from_numpy(weight).float()
+            torch_tensors.append(weight)
+        
+        retracted_QCTN = torch.einsum(einsum_equation, *torch_tensors)
 
         local_print(f"retracted_QCTN: {retracted_QCTN}")
 
         return retracted_QCTN
     
     @staticmethod
-    def contract_with_self(qctn, circuit_states=None, mx=None,  initialization_mode=False):
+    def contract_with_self(qctn, circuit_array_input=None):
         """
         Contract the given QCTN with itself.
         
         Args:
             qctn (QCTN): The quantum circuit tensor network to contract.
+            circuit_array_input (torch.Tensor, optional): Input array for the circuit.
         
         Returns:
-            jnp.ndarray: The result of the tensor contraction.
+            torch.Tensor: The result of the tensor contraction.
         """
-        
 
         input_ranks, adjacency_matrix, output_ranks = qctn.circuit
         cores_name = qctn.cores
@@ -461,151 +464,134 @@ class ContractorOptEinsum:
         local_print(f'output_symbols_stack after source QCTN processing: {output_symbols_stack}')
 
         if circuit_array_input is not None:
-            local_print(f"check circuit_array_input shape: {circuit_array_input.shape}, expected input_ranks: {input_ranks}")
-            # TODO: correct this code, check the circuit_array_input shape
-            # for idx, core_name in enumerate(cores_name):
-            #     expected_input_rank = len(input_ranks[idx])
-            #     if circuit_array_input[idx].ndim != expected_input_rank:
-            #         raise ValueError(f'circuit_array_input[{idx}] has shape {circuit_array_input[idx].shape}, expected input rank {expected_input_rank}')
             einsum_equation_output = ''.join(real_output_symbols_stack)
-
             einsum_equation_lefthand = f"{''.join(input_symbols_stack)},{einsum_equation_lefthand},{einsum_equation_output}"
 
         einsum_equation = f'{einsum_equation_lefthand}->'
-
-        tensor_shapes = [cores_weights[core_name].shape for core_name in cores_name] + \
-                        [cores_weights[core_name].shape for core_name in cores_name[::-1]]
-
-        if circuit_array_input is not None:
-            tensor_shapes = [circuit_array_input.shape] + tensor_shapes + [circuit_array_input.shape]
 
         for core_name in cores_name:
             local_print(f'Core: {core_name}, Shape: {cores_weights[core_name].shape}')
 
         local_print(f'QCTN: {qctn.circuit}')
         local_print(f'Einsum Equation: {einsum_equation}')
-        local_print(f'Tensor Shapes: {tensor_shapes}')
 
-        qctn.einsum_expr = opt_einsum.contract_expression(einsum_equation, *tensor_shapes, optimize=Configuration.opt_einsum_optimize)
-        jit_retraction = jax.jit(qctn.einsum_expr)
-
-        local_print(f'qctn.einsum_expr: {qctn.einsum_expr is None}')
-
-        if initialization_mode:
-            # In initialization mode, we do not actually contract the target QCTN
-            return qctn.einsum_expr
-
-        inputs_cores =  [cores_weights[core_name] for core_name in cores_name] + \
-                        [cores_weights[core_name] for core_name in cores_name[::-1]]
+        # Convert to PyTorch tensors
+        torch_tensors = []
         
         if circuit_array_input is not None:
-            inputs_cores = [circuit_array_input] + inputs_cores + [circuit_array_input]
+            if not isinstance(circuit_array_input, torch.Tensor):
+                circuit_array_input = torch.from_numpy(circuit_array_input).float()
+            torch_tensors.append(circuit_array_input)
 
+        for core_name in cores_name:
+            weight = cores_weights[core_name]
+            if not isinstance(weight, torch.Tensor):
+                weight = torch.from_numpy(weight).float()
+            torch_tensors.append(weight)
+        
+        for core_name in cores_name[::-1]:
+            weight = cores_weights[core_name]
+            if not isinstance(weight, torch.Tensor):
+                weight = torch.from_numpy(weight).float()
+            torch_tensors.append(weight)
+        
+        if circuit_array_input is not None:
+            torch_tensors.append(circuit_array_input)
 
-        retracted_QCTN = jit_retraction(*inputs_cores)
+        retracted_QCTN = torch.einsum(einsum_equation, *torch_tensors)
 
         local_print(f"retracted_QCTN: {retracted_QCTN}")
 
         return retracted_QCTN
 
     @staticmethod
-    def contract_with_self_for_gradient(qctn, circuit_array_input=None, circuit_list_input=None):
+    def contract_with_self_for_gradient(qctn, circuit_array_input=None):
         """
-        We use JAX's autograd to compute the core gradient.
+        Contract QCTN with itself and compute gradients using PyTorch autograd.
+        
+        Args:
+            qctn (QCTN): The quantum circuit tensor network to contract.
+            circuit_array_input (torch.Tensor, optional): Input array for the circuit.
+        
+        Returns:
+            tuple: (loss, gradients) where gradients is a list of gradient tensors.
         """
         cores_name = qctn.cores
         cores_weights = qctn.cores_weights
 
-        inputs_cores =  [cores_weights[core_name] for core_name in cores_name] + \
-                        [cores_weights[core_name] for core_name in cores_name[::-1]]
+        # Convert to PyTorch tensors with gradient tracking
+        torch_weights = {}
+        for core_name in cores_name:
+            weight = cores_weights[core_name]
+            if not isinstance(weight, torch.Tensor):
+                weight = torch.from_numpy(weight).float()
+            weight.requires_grad_(True)
+            torch_weights[core_name] = weight
 
-        if circuit_array_input is not None:
-            inputs_cores = [circuit_array_input] + inputs_cores + [circuit_array_input]
+        # Store in qctn for contraction
+        original_weights = qctn.cores_weights
+        qctn.cores_weights = torch_weights
 
-        def mse_loss_fn(*inputs_cores):
-            retracted_QCTN = qctn.einsum_expr(*inputs_cores)
-            return jnp.mean((retracted_QCTN - 1.0) ** 2) 
-
-        # print(f'ContractorOptEinsum.contract_with_QCTN_for_gradient called {qctn.einsum_expr is None}')
-
-        if qctn.einsum_expr is None:
-            ContractorOptEinsum.contract_with_self(qctn, circuit_array_input=circuit_array_input, initialization_mode=True)
-            argnums = list(range(len(cores_name)))
-            if circuit_array_input is not None:
-                argnums = list(range(len(cores_name) + 2))  # +2 for the circuit_array_input at start and end
-
-            qctn.jit_retraction_with_self_value_gradient = jax.jit(jax.value_and_grad(mse_loss_fn, 
-                                                                                      argnums=argnums))
-
-        loss, grad_cores = qctn.jit_retraction_with_self_value_gradient(*inputs_cores)
+        # Perform contraction
+        retracted_QCTN = ContractorPyTorch.contract_with_self(qctn, circuit_array_input)
         
-        if circuit_array_input is not None:
-            grad_cores = grad_cores[1:-1]  # Remove gradients for circuit_array_input
-
-        # local_print('inputs_cores', [x.shape for x in inputs_cores])
-        # local_print('mean', [x.mean() for x in inputs_cores])
-        # local_print('var', [x.var() for x in inputs_cores])
-        # local_print('grad_cores', [x.shape for x in grad_cores])
-
-        local_print(f'Loss: {loss}')
+        # Compute MSE loss
+        loss = torch.mean((retracted_QCTN - 1.0) ** 2)
         
-        # local_print(f"-"*70)
-
-        return loss, grad_cores
+        # Compute gradients
+        loss.backward()
+        
+        grad_cores = [torch_weights[core_name].grad for core_name in cores_name]
+        
+        # Restore original weights
+        qctn.cores_weights = original_weights
+        
+        local_print(f'Loss: {loss.item()}')
+        
+        return loss.item(), grad_cores
 
     @staticmethod
     def contract_with_QCTN_for_gradient(qctn, target_qctn):
         """
-        We use JAX's autograd to compute the core gradient.
+        Contract QCTN with target QCTN and compute gradients using PyTorch autograd.
+        
+        Args:
+            qctn (QCTN): The quantum circuit tensor network to optimize.
+            target_qctn (QCTN): The target quantum circuit tensor network.
+        
+        Returns:
+            tuple: (loss, gradients) where gradients is a list of gradient tensors.
         """
-
         cores_name = qctn.cores
         cores_weights = qctn.cores_weights
-        target_cores_name = target_qctn.cores
-        target_cores_weights = target_qctn.cores_weights
+
+        # Convert to PyTorch tensors with gradient tracking
+        torch_weights = {}
+        for core_name in cores_name:
+            weight = cores_weights[core_name]
+            if not isinstance(weight, torch.Tensor):
+                weight = torch.from_numpy(weight).float()
+            weight.requires_grad_(True)
+            torch_weights[core_name] = weight
+
+        # Store in qctn for contraction
+        original_weights = qctn.cores_weights
+        qctn.cores_weights = torch_weights
+
+        # Perform contraction
+        retracted_QCTN = ContractorPyTorch.contract_with_QCTN(qctn, target_qctn)
         
-        inputs_cores = [cores_weights[core_name] for core_name in cores_name] + \
-            [target_cores_weights[core_name] for core_name in target_cores_name]
-
-        def mse_loss_fn(*inputs_cores):
-            retracted_QCTN = qctn.einsum_expr(*inputs_cores)
-            return jnp.mean((retracted_QCTN - 1.0) ** 2) 
-
-        # print(f'ContractorOptEinsum.contract_with_QCTN_for_gradient called {qctn.einsum_expr is None}')
-
-        if qctn.einsum_expr is None:
-            # print("contract with QCTN")
-            
-            ContractorOptEinsum.contract_with_QCTN(qctn, target_qctn, initialization_mode=True)
-            argnums = list(range(len(cores_name)))
-
-            # print(f'argnums: {argnums}')
-
-            qctn.jit_retraction_with_QCTN_value_gradient = jax.jit(jax.value_and_grad(mse_loss_fn, 
-                                                                                      argnums=argnums))
-
-        # print(f"qctn.jit_retraction_with_QCTN_value_gradient: {qctn.jit_retraction_with_QCTN_value_gradient is None}")
-
-        # print('inputs_cores', inputs_cores, len(inputs_cores))
-        # print('inputs_cores', [x.shape for x in inputs_cores])
-
-        local_print(f"-"*70)
-
-        local_print('inputs_cores', [x.shape for x in inputs_cores])
-        local_print('mean', [x.mean() for x in inputs_cores])
-        local_print('var', [x.var() for x in inputs_cores])
-
-        # local_print(f"-"*70)
-
-        loss, grad_cores = qctn.jit_retraction_with_QCTN_value_gradient(*inputs_cores)
+        # Compute MSE loss
+        loss = torch.mean((retracted_QCTN - 1.0) ** 2)
         
-        # local_print('inputs_cores', [x.shape for x in inputs_cores])
-        # local_print('mean', [x.mean() for x in inputs_cores])
-        # local_print('var', [x.var() for x in inputs_cores])
-
-        # local_print(f"-"*70)
-
-        local_print(f'Loss: {loss}')
+        # Compute gradients
+        loss.backward()
         
-
-        return loss, grad_cores
+        grad_cores = [torch_weights[core_name].grad for core_name in cores_name]
+        
+        # Restore original weights
+        qctn.cores_weights = original_weights
+        
+        local_print(f'Loss: {loss.item()}')
+        
+        return loss.item(), grad_cores
