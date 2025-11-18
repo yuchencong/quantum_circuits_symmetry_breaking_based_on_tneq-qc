@@ -6,9 +6,38 @@ computational backends for tensor operations.
 """
 
 from __future__ import annotations
-from typing import Optional, Type
+from typing import Optional, Type, Any, Union
 from abc import ABC, abstractmethod
 import numpy as np
+
+
+class BackendInfo:
+    """
+    Simple information class for backend configuration.
+    
+    This class only records backend information, without providing
+    tensor allocation or conversion methods. The actual tensor operations
+    should be implemented in the caller based on this information.
+    """
+    
+    def __init__(self, backend_type: str, device: Optional[str] = None, **kwargs):
+        """
+        Initialize backend information.
+        
+        Args:
+            backend_type (str): Type of backend ('jax', 'pytorch', etc.).
+            device (Optional[str]): Device specification (e.g., 'cpu', 'cuda', 'cuda:0', 'gpu').
+            **kwargs: Additional backend-specific configuration.
+        """
+        self.backend_type = backend_type.lower()
+        self.device = device
+        self.config = kwargs
+    
+    def __repr__(self):
+        return f"BackendInfo(backend_type='{self.backend_type}', device='{self.device}', config={self.config})"
+    
+    def __str__(self):
+        return self.__repr__()
 
 class ComputeBackend(ABC):
     """
@@ -17,6 +46,10 @@ class ComputeBackend(ABC):
     All backends must implement these methods for tensor operations,
     gradient computation, and JIT compilation.
     """
+    
+    def __init__(self):
+        """Initialize backend with BackendInfo."""
+        self.backend_info: Optional[BackendInfo] = None
 
     @abstractmethod
     def execute_expression(self, expression, *tensors):
@@ -76,17 +109,58 @@ class ComputeBackend(ABC):
     def get_backend_name(self) -> str:
         """Return the name of the backend."""
         pass
+    
+    def get_backend_info(self) -> BackendInfo:
+        """
+        Get the BackendInfo instance for this backend.
+        
+        Returns:
+            BackendInfo instance.
+        """
+        if self.backend_info is None:
+            # Create default BackendInfo
+            self.backend_info = BackendInfo(self.get_backend_name())
+        return self.backend_info
+    
+    def set_backend_info(self, backend_info: BackendInfo):
+        """
+        Set the BackendInfo instance for this backend.
+        
+        Args:
+            backend_info (BackendInfo): BackendInfo instance to use.
+        """
+        if backend_info.backend_type != self.get_backend_name():
+            raise ValueError(
+                f"BackendInfo type '{backend_info.backend_type}' does not match "
+                f"backend '{self.get_backend_name()}'"
+            )
+        self.backend_info = backend_info
 
 
 class JAXBackend(ComputeBackend):
     """JAX computational backend."""
 
-    def __init__(self):
+    def __init__(self, device: Optional[str] = None):
+        """
+        Initialize JAX backend.
+        
+        Args:
+            device (Optional[str]): Device specification ('cpu', 'gpu', etc.).
+                If None, automatically detects available devices.
+        """
+        super().__init__()
         try:
             import jax
             import jax.numpy as jnp
             self.jax = jax
             self.jnp = jnp
+            
+            # Auto-detect device if not specified
+            if device is None:
+                device = 'gpu' if jax.devices('gpu') else 'cpu'
+            
+            # Create BackendInfo
+            self.backend_info = BackendInfo('jax', device=device)
         except ImportError:
             raise ImportError("JAX is not installed. Please install it with: pip install jax jaxlib")
 
@@ -106,7 +180,17 @@ class JAXBackend(ComputeBackend):
         """Convert to JAX array."""
         if isinstance(array, self.jnp.ndarray):
             return array
-        return self.jnp.array(array)
+        
+        # Convert based on backend_info
+        tensor = self.jnp.array(array)
+        
+        # Device placement if GPU
+        if self.backend_info.device and 'gpu' in self.backend_info.device.lower():
+            devices = self.jax.devices('gpu')
+            if devices:
+                tensor = self.jax.device_put(tensor, devices[0])
+        
+        return tensor
 
     def get_backend_name(self) -> str:
         return "jax"
@@ -115,10 +199,25 @@ class JAXBackend(ComputeBackend):
 class PyTorchBackend(ComputeBackend):
     """PyTorch computational backend."""
 
-    def __init__(self):
+    def __init__(self, device: Optional[str] = None):
+        """
+        Initialize PyTorch backend.
+        
+        Args:
+            device (Optional[str]): Device specification ('cpu', 'cuda', 'cuda:0', etc.).
+                If None, automatically selects 'cuda' if available, otherwise 'cpu'.
+        """
+        super().__init__()
         try:
             import torch
             self.torch = torch
+            
+            # Auto-detect device if not specified
+            if device is None:
+                device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            
+            # Create BackendInfo
+            self.backend_info = BackendInfo('pytorch', device=device)
         except ImportError:
             raise ImportError("PyTorch is not installed. Please install it with: pip install torch")
 
@@ -148,25 +247,34 @@ class PyTorchBackend(ComputeBackend):
             # Prepare tensors and enable gradients for specified arguments
             tensor_args = []
             for i, arg in enumerate(args):
+                if not isinstance(arg, self.torch.Tensor):
+                    arg = self.torch.from_numpy(arg).float()
+                
                 if i in arg_indices:
-                    if not isinstance(arg, self.torch.Tensor):
-                        arg = self.torch.from_numpy(arg).float()
+                    # Enable gradient tracking for parameters to optimize
                     arg.requires_grad_(True)
                 else:
-                    if not isinstance(arg, self.torch.Tensor):
-                        arg = self.torch.from_numpy(arg).float()
+                    # Disable gradient tracking for other tensors
+                    arg.requires_grad_(False)
+                
                 tensor_args.append(arg)
 
             # Compute loss
             loss = loss_fn(*tensor_args)
 
-            # Compute gradients
-            loss.backward()
+            # Compute gradients using torch.autograd.grad
+            # This works correctly with both leaf and non-leaf tensors
+            grad_tensors = [tensor_args[i] for i in arg_indices]
+            gradients = self.torch.autograd.grad(
+                outputs=loss,
+                inputs=grad_tensors,
+                create_graph=False,  # Don't build computation graph for gradients
+                retain_graph=False   # Release computation graph after computing gradients
+            )
 
-            # Extract gradients for specified arguments
-            gradients = tuple(tensor_args[i].grad for i in arg_indices)
-
-            return loss.item(), gradients
+            # Return loss as tensor value (not .item()) to preserve type
+            # Detach it from computation graph to free memory
+            return loss.detach(), gradients
 
         return value_and_grad_fn
 
@@ -183,11 +291,17 @@ class PyTorchBackend(ComputeBackend):
     def convert_to_tensor(self, array):
         """Convert to PyTorch tensor."""
         if isinstance(array, self.torch.Tensor):
+            # Move to correct device if needed
+            if str(array.device) != self.backend_info.device:
+                return array.to(self.backend_info.device)
             return array
-        # if not a numpy array, convert jax array to numpy first
+        
+        # Convert array to tensor based on backend_info
         if not isinstance(array, np.ndarray):
             array = np.array(array)
-        return self.torch.from_numpy(array).float()
+        
+        tensor = self.torch.from_numpy(array).float()
+        return tensor.to(self.backend_info.device)
 
     def get_backend_name(self) -> str:
         return "pytorch"
@@ -199,7 +313,7 @@ class BackendFactory:
     
     Usage:
         backend = BackendFactory.create_backend('jax')
-        backend = BackendFactory.create_backend('pytorch')
+        backend = BackendFactory.create_backend('pytorch', device='cuda')
     """
 
     _backends = {
@@ -211,12 +325,14 @@ class BackendFactory:
     _backend_instance: Optional[ComputeBackend] = None
 
     @classmethod
-    def create_backend(cls, backend_name: str) -> ComputeBackend:
+    def create_backend(cls, backend_name: str, device: Optional[str] = None, **kwargs) -> ComputeBackend:
         """
         Create a backend instance.
         
         Args:
             backend_name (str): Name of the backend ('jax' or 'pytorch').
+            device (Optional[str]): Device specification.
+            **kwargs: Additional backend-specific configuration.
         
         Returns:
             ComputeBackend: Backend instance.
@@ -232,18 +348,20 @@ class BackendFactory:
                 f"Available backends: {list(cls._backends.keys())}"
             )
 
-        return cls._backends[backend_name]()
+        return cls._backends[backend_name](device=device, **kwargs)
 
     @classmethod
-    def set_default_backend(cls, backend_name: str):
+    def set_default_backend(cls, backend_name: str, device: Optional[str] = None, **kwargs):
         """
         Set the default backend for the application.
         
         Args:
             backend_name (str): Name of the backend ('jax' or 'pytorch').
+            device (Optional[str]): Device specification.
+            **kwargs: Additional backend-specific configuration.
         """
         cls._default_backend = backend_name.lower()
-        cls._backend_instance = cls.create_backend(backend_name)
+        cls._backend_instance = cls.create_backend(backend_name, device=device, **kwargs)
 
     @classmethod
     def get_default_backend(cls) -> ComputeBackend:
@@ -254,7 +372,7 @@ class BackendFactory:
             ComputeBackend: Default backend instance (creates JAX backend if not set).
         """
         if cls._backend_instance is None:
-            cls.set_default_backend('jax')
+            cls.set_default_backend('jax', 'gpu')
         return cls._backend_instance
 
     @classmethod

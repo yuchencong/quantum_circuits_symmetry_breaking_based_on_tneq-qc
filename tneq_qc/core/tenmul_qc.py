@@ -39,12 +39,76 @@ class QCTNHelper:
                     "-2-----B-6-----D-----2-\n" \
                     "-2-A-3-----C-8-D-----2-"
         else:
-            return  "-2-A-------------------2-\n" \
-                    "-2-A--2--B-------------2-\n" \
-                    "-2-------B--2--C-------2-\n" \
-                    "-2-------------C--2--D-2-\n" \
-                    "-2-------------------D-2-"
+            def generate_std_graph(n):
+                graph = ""
+                char_list = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z']
+                
+                for i in range(n):
+                    cid = i - 1
+                    nid = i
+                    if i == 0:
+                        line = "-3-" + char_list[i] + (n - 2) * 6 * "-" + "-3-"
+                    elif i == n - 1:
+                        line = "-3-" + (n - 2) * 6 * "-" + char_list[cid] + "-3-"
+                    else:
+                        line = "-3-"
+                        line += cid * 6 * "-"
+                        line += char_list[cid]
+                        line += "--3--"
+                        line += char_list[nid]
+                        line += (n - nid - 2) * 6 * "-"
+                        line += "-3-"
+                    
+                    graph += line + "\n"
+                return graph
+
+            return generate_std_graph(5)
         
+            # return  "-3-A-3-"
+            # return  "-3-A-3-B-3-C-3-D-3-"
+
+            # return  "-3-A-3-\n" \
+            #         "-3-A-3-"
+
+            # return  "-3-A-3-B-3-C-3-\n" \
+            #         "-3-A-3-B-3-C-3-"
+
+            # return  "-3-A-3-\n" \
+            #         "-3-A-3-\n" \
+            #         "-3-A-3-"
+
+            # return  "-3-A-----3-\n" \
+            #         "-3-A-3-B-3-\n" \
+            #         "-3-----B-3-"
+
+            # return  "-3-A-3-\n" \
+            #         "-3-A-3-\n" \
+            #         "-3-A-3-\n" \
+            #         "-3-A-3-"
+        
+            # return  "-3-A-------------3-\n" \
+            #         "-3-A--3--B-------3-\n" \
+            #         "-3-------B--3--C-3-\n" \
+            #         "-3-------------C-3-\n"
+
+            # return  "-3-A-------------------3-\n" \
+            #         "-3-A--3--B-------------3-\n" \
+            #         "-3-------B--3--C-------3-\n" \
+            #         "-3-------------C--3--D-3-\n" \
+            #         "-3-------------------D-3-"
+        
+            return  "-3-A-------------------------3-\n" \
+                    "-3-A--3--B-------------------3-\n" \
+                    "-3-------B--3--C-------------3-\n" \
+                    "-3-------------C--3--D-------3-\n" \
+                    "-3-------------------D--3--E-3-\n" \
+                    "-3-------------------------E-3-"
+            
+
+            # circuit_states.
+            # (1, K), 001 
+
+
             # return  "-2-A-2-"
             # return  "-2-A-3-B-4-C-3-D-2-"
         
@@ -168,7 +232,7 @@ class QCTN:
  
     """
 
-    def __init__(self, graph):
+    def __init__(self, graph, backend_info=None):
         """
         Initialize the QCTN with a quantum circuit graph.
         
@@ -188,6 +252,8 @@ class QCTN:
 
         # This will build the attributes `self.circuit` and `self.adjacency_matrix`
         self._circuit_to_adjacency()
+
+        self.backend_info = backend_info
 
         # Initialize the circuit with input ranks, adjacency matrix, and output ranks
         self.initialize_random_key = jax.random.PRNGKey(0)
@@ -323,7 +389,12 @@ class QCTN:
             adjacency_ranks = self.adjacency_matrix[idx, :]
 
             core_shape = input_rank + list(itertools.chain.from_iterable(adjacency_ranks)) + output_rank
-            core = jax.random.normal(self.initialize_random_key, shape=core_shape) * Configuration.initialize_variance      
+
+            if self.backend_info is not None and self.backend_info.backend_type == 'pytorch':
+                import torch
+                core = torch.randn(core_shape, device=self.backend_info.device) * Configuration.initialize_variance
+            else:
+                core = jax.random.normal(self.initialize_random_key, shape=core_shape) * Configuration.initialize_variance      
 
             self.cores_weights[core_name] = core
 

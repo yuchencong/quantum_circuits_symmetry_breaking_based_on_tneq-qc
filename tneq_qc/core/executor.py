@@ -8,6 +8,7 @@ expressions and then execute them using the specified backend.
 from __future__ import annotations
 from typing import Optional, Union, List, Tuple
 import numpy as np
+import torch
 
 from .contractor import TensorContractor
 from ..backends.backend_factory import BackendFactory, ComputeBackend
@@ -34,7 +35,7 @@ class ContractExecutor:
         if backend is None:
             self.backend = BackendFactory.get_default_backend()
         elif isinstance(backend, str):
-            self.backend = BackendFactory.create_backend(backend)
+            self.backend = BackendFactory.create_backend(backend, device="cuda")
         else:
             self.backend = backend
 
@@ -157,27 +158,49 @@ class ContractExecutor:
         jit_fn = self.backend.jit_compile(qctn._contract_expr_with_qctn)
         return self.backend.execute_expression(jit_fn, *tensors)
 
-    def contract_with_self(self, qctn, circuit_array_input=None):
+    def contract_with_self(self, qctn, circuit_states=None, measure_input=None, measure_is_matrix=False):
         """
         Contract QCTN with itself (hermitian conjugate).
         
         Args:
             qctn (QCTN): The quantum circuit tensor network to contract.
-            circuit_array_input (array, optional): Optional input array.
+            circuit_states (array or list, optional): Circuit input states. 
+                Can be numpy array, torch tensor, jax ndarray, or a list of such tensors.
+            measure_input (array or list, optional): Measurement input.
+                Can be numpy array, torch tensor, jax ndarray, or a list of such tensors.
+            measure_is_matrix (bool): If True, measure_input is the outer product matrix Mx;
+                If False, measure_input is the vector phi_x.
         
         Returns:
             Backend tensor: Result of the contraction.
         """
-        input_shape = None
-        if circuit_array_input is not None:
-            circuit_array_input = self.backend.convert_to_tensor(circuit_array_input)
-            input_shape = circuit_array_input.shape
+        # Convert circuit_states
+        states_shape = None
+        if circuit_states is not None:
+            if isinstance(circuit_states, list):
+                circuit_states = [self.backend.convert_to_tensor(s) for s in circuit_states]
+                states_shape = tuple([s.shape for s in circuit_states])
+            else:
+                circuit_states = self.backend.convert_to_tensor(circuit_states)
+                states_shape = circuit_states.shape
+        
+        # Convert measure_input
+        measure_shape = None
+        if measure_input is not None:
+            if isinstance(measure_input, list):
+                measure_input = [self.backend.convert_to_tensor(m) for m in measure_input]
+                measure_shape = tuple([m.shape for m in measure_input])
+            else:
+                measure_input = self.backend.convert_to_tensor(measure_input)
+                measure_shape = measure_input.shape
         
         # Generate expression
-        einsum_eq, tensor_shapes = self.contractor.build_with_self_expression(qctn, input_shape)
+        einsum_eq, tensor_shapes = self.contractor.build_with_self_expression(
+            qctn, states_shape, measure_shape, measure_is_matrix
+        )
         
         # Create optimized expression if not cached
-        cache_key = f'_contract_expr_self_{input_shape}'
+        cache_key = f'_contract_expr_self_{states_shape}_{measure_shape}_{measure_is_matrix}'
         if not hasattr(qctn, cache_key):
             expr = self.contractor.create_contract_expression(einsum_eq, tensor_shapes)
             setattr(qctn, cache_key, expr)
@@ -186,40 +209,91 @@ class ContractExecutor:
         
         # Prepare tensors
         tensors = []
-        if circuit_array_input is not None:
-            tensors.append(circuit_array_input)
         
+        # Add circuit_states
+        if circuit_states is not None:
+            if isinstance(circuit_states, list):
+                tensors.extend(circuit_states)
+            else:
+                tensors.append(circuit_states)
+        
+        # Add cores
         tensors += [self.backend.convert_to_tensor(qctn.cores_weights[c]) for c in qctn.cores]
+
+        # Add measure_input
+        if measure_input is not None:
+            if isinstance(measure_input, list):
+                tensors.extend(measure_input)
+            else:
+                tensors.append(measure_input)
+        
+        # Add inverse cores
         tensors += [self.backend.convert_to_tensor(qctn.cores_weights[c]) for c in qctn.cores[::-1]]
         
-        if circuit_array_input is not None:
-            tensors.append(circuit_array_input)
+        # Add circuit_states again (conjugate side)
+        if circuit_states is not None:
+            if isinstance(circuit_states, list):
+                tensors.extend(circuit_states)
+            else:
+                tensors.append(circuit_states)
         
+        # TODO: use general interface, this will cause error with jax
+        for i in range(len(tensors)):
+            tensors[i] = tensors[i].cuda()
+
         # Execute
         jit_fn = self.backend.jit_compile(expr)
         return self.backend.execute_expression(jit_fn, *tensors)
 
-    def contract_with_self_for_gradient(self, qctn, circuit_array_input=None) -> Tuple:
+    def contract_with_self_for_gradient(self, qctn, circuit_states=None, measure_input=None, measure_is_matrix=False) -> Tuple:
         """
         Contract QCTN with itself and compute gradients.
         
         Args:
             qctn (QCTN): The quantum circuit tensor network to contract.
-            circuit_array_input (array, optional): Optional input array.
+            circuit_states (array or list, optional): Circuit input states. 
+                Can be numpy array, torch tensor, jax ndarray, or a list of such tensors.
+            measure_input (array or list, optional): Measurement input.
+                Can be numpy array, torch tensor, jax ndarray, or a list of such tensors.
+            measure_is_matrix (bool): If True, measure_input is the outer product matrix Mx;
+                If False, measure_input is the vector phi_x.
         
         Returns:
             tuple: (loss, gradients)
         """
-        input_shape = None
-        if circuit_array_input is not None:
-            circuit_array_input = self.backend.convert_to_tensor(circuit_array_input)
-            input_shape = circuit_array_input.shape
+        # Convert circuit_states
+        states_shape = None
+        num_states_tensors = 0
+        if circuit_states is not None:
+            if isinstance(circuit_states, list):
+                circuit_states = [self.backend.convert_to_tensor(s) for s in circuit_states]
+                states_shape = tuple([s.shape for s in circuit_states])
+                num_states_tensors = len(circuit_states)
+            else:
+                circuit_states = self.backend.convert_to_tensor(circuit_states)
+                states_shape = circuit_states.shape
+                num_states_tensors = 1
+        
+        # Convert measure_input
+        measure_shape = None
+        num_measure_tensors = 0
+        if measure_input is not None:
+            if isinstance(measure_input, list):
+                measure_input = [self.backend.convert_to_tensor(m) for m in measure_input]
+                measure_shape = tuple([m.shape for m in measure_input])
+                num_measure_tensors = len(measure_input)
+            else:
+                measure_input = self.backend.convert_to_tensor(measure_input)
+                measure_shape = measure_input.shape
+                num_measure_tensors = 1
         
         # Generate expression
-        einsum_eq, tensor_shapes = self.contractor.build_with_self_expression(qctn, input_shape)
+        einsum_eq, tensor_shapes = self.contractor.build_with_self_expression(
+            qctn, states_shape, measure_shape, measure_is_matrix
+        )
         
         # Create optimized expression if not cached
-        cache_key = f'_contract_expr_self_{input_shape}'
+        cache_key = f'_contract_expr_self_{states_shape}_{measure_shape}_{measure_is_matrix}'
         if not hasattr(qctn, cache_key):
             expr = self.contractor.create_contract_expression(einsum_eq, tensor_shapes)
             setattr(qctn, cache_key, expr)
@@ -227,26 +301,33 @@ class ContractExecutor:
             expr = getattr(qctn, cache_key)
         
         # Define loss function
-        def mse_loss_fn(*tensors):
+        def loss_fn(*tensors):
             jit_fn = self.backend.jit_compile(expr)
             result = self.backend.execute_expression(jit_fn, *tensors)
             # Compute MSE loss
-            diff = result - 1.0
-            return (diff * diff).mean()
-        
+            # diff = result - 1.0
+            # return (diff * diff).mean()
+
+            # compute cross entropy loss
+            target = torch.ones_like(result)
+            log_result = torch.log(result + 1e-10)
+            return -torch.mean(target * log_result)
+
         # Determine which arguments to compute gradients for
+        # Skip circuit_states and measure_input, only compute gradients for cores
         num_cores = len(qctn.cores)
-        if circuit_array_input is not None:
-            # Skip first and last tensor (inputs), only compute gradients for cores
-            argnums = list(range(1, 1 + num_cores))
-        else:
-            # All tensors are cores
-            argnums = list(range(num_cores))
+        total_args = num_states_tensors * 2 + num_cores * 2 + num_measure_tensors
+        # argnums = list(range(0, total_args))
+
+        cores_index = list(range(num_states_tensors, num_states_tensors + num_cores))
+        inv_cores_index = list(range(num_states_tensors + num_cores + num_measure_tensors,
+                                   num_states_tensors + num_cores + num_measure_tensors + num_cores))
+        argnums = cores_index + inv_cores_index
         
         # Create value_and_grad function
-        cache_key_grad = f'_grad_fn_self_{input_shape}'
+        cache_key_grad = f'_grad_fn_self_{states_shape}_{measure_shape}_{measure_is_matrix}'
         if not hasattr(qctn, cache_key_grad):
-            value_and_grad_fn = self.backend.compute_value_and_grad(mse_loss_fn, argnums=argnums)
+            value_and_grad_fn = self.backend.compute_value_and_grad(loss_fn, argnums=argnums)
             value_and_grad_fn = self.backend.jit_compile(value_and_grad_fn)
             setattr(qctn, cache_key_grad, value_and_grad_fn)
         else:
@@ -254,18 +335,48 @@ class ContractExecutor:
         
         # Prepare tensors
         tensors = []
-        if circuit_array_input is not None:
-            tensors.append(circuit_array_input)
         
+        # Add circuit_states
+        if circuit_states is not None:
+            if isinstance(circuit_states, list):
+                tensors.extend(circuit_states)
+            else:
+                tensors.append(circuit_states)
+        
+        # Add cores
         tensors += [self.backend.convert_to_tensor(qctn.cores_weights[c]) for c in qctn.cores]
+
+        # Add measure_input
+        if measure_input is not None:
+            if isinstance(measure_input, list):
+                tensors.extend(measure_input)
+            else:
+                tensors.append(measure_input)
+
+        # Add inverse cores
         tensors += [self.backend.convert_to_tensor(qctn.cores_weights[c]) for c in qctn.cores[::-1]]
         
-        if circuit_array_input is not None:
-            tensors.append(circuit_array_input)
+        # Add circuit_states again (conjugate side)
+        if circuit_states is not None:
+            if isinstance(circuit_states, list):
+                tensors.extend(circuit_states)
+            else:
+                tensors.append(circuit_states)
         
+        # TODO: use general interface, this will cause error with jax
+        for i in range(len(tensors)):
+            tensors[i] = tensors[i].cuda()
+
+        # print('input tensors', len(tensors))
+
         # Compute value and gradients
         loss, grads = value_and_grad_fn(*tensors)
+
+
+        grads = [grads[i] + grads[-j] for i, j in zip(range(0, len(cores_index)), range(1, len(cores_index)+1))]
         
+        # print(f'grads for cores: {len(grads)}')
+
         return loss, grads
 
     def contract_with_qctn_for_gradient(self, qctn, target_qctn) -> Tuple:
@@ -291,19 +402,24 @@ class ContractExecutor:
         expr = qctn._contract_expr_with_qctn
         
         # Define loss function
-        def mse_loss_fn(*tensors):
+        def loss_fn(*tensors):
             jit_fn = self.backend.jit_compile(expr)
             result = self.backend.execute_expression(jit_fn, *tensors)
-            # Compute MSE loss
-            diff = result - 1.0
-            return (diff * diff).mean()
+            # # Compute MSE loss
+            # diff = result - 1.0
+            # return (diff * diff).mean()
+
+            # compute cross entropy loss
+            target = torch.ones_like(result)
+            log_result = torch.log(result + 1e-10)
+            return -torch.mean(target * log_result)
         
         # Only compute gradients for qctn cores, not target_qctn
         argnums = list(range(len(qctn.cores)))
         
         # Create value_and_grad function
         if not hasattr(qctn, '_grad_fn_with_qctn'):
-            value_and_grad_fn = self.backend.compute_value_and_grad(mse_loss_fn, argnums=argnums)
+            value_and_grad_fn = self.backend.compute_value_and_grad(loss_fn, argnums=argnums)
             value_and_grad_fn = self.backend.jit_compile(value_and_grad_fn)
             qctn._grad_fn_with_qctn = value_and_grad_fn
         else:

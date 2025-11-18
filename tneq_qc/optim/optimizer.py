@@ -1,4 +1,5 @@
 import random
+import torch
 import jax
 import jax.numpy as jnp
 
@@ -15,7 +16,8 @@ class Optimizer:
                        tol=1e-6, # Tolerance for convergence
                        beta1=0.9, # Adam's first moment estimate decay rate
                        beta2=0.999, # Adam's second moment estimate decay rate
-                       epsilon=1e-8 # Small constant to prevent division by zero
+                       epsilon=1e-8, # Small constant to prevent division by zero
+                       executor=None,
                   ):
 
         self.method = method
@@ -27,43 +29,141 @@ class Optimizer:
         self.epsilon = epsilon
         self.iter = 0
 
-    # def optimize(self, qctn, **kwargs):
-    #     """
-    #     Optimize a function using JAX.
+        self.executor = executor
+
+    def optimize(self, qctn, data_list, **kwargs):
+        """
+        Optimize a function.
         
-    #     Args:
-    #         qctn (QCTN): The quantum circuit tensor network to optimize.
-    #         kwargs: Additional arguments for different optimization modes.
+        Args:
+            qctn (QCTN): The quantum circuit tensor network to optimize.
+            kwargs: Additional arguments for different optimization modes.
 
-    #     Returns:
-    #         None: The function modifies the qctn in place.
-    #     """
+        Returns:
+            None: The function modifies the qctn in place.
+        """
+        while self.iter < self.max_iter:
+            # TODO: impl general function named contract_for_gradient
+            data_index = self.iter % len(data_list)
+            loss, grads = self.executor.contract_with_self_for_gradient(qctn, **data_list[data_index], **kwargs)
 
-    #      while self.iter < self.max_iter:
+            # Convert loss to scalar for comparison and printing
+            loss_value = float(loss) if hasattr(loss, 'item') else loss
             
-    #         loss, grads = qctn.contract_with_QCTN_for_gradient(target_qctn)
+            if self.tol and loss_value < self.tol:
+                print(f"Convergence achieved at iteration {self.iter} with loss {loss_value}.")
+                break
+            
+            print(f"Iteration {self.iter}: loss = {loss_value}")
 
-    #         if self.tol and loss < self.tol:
-    #             print(f"Convergence achieved at iteration {self.iter} with loss {loss}.")
-    #             break
+            # Update parameters using the optimizer step
+            with torch.no_grad():
+                cache_lr = self.learning_rate
 
-    #         # Update parameters using the optimizer step
-    #         qctn.params = self.step(qctn, grads)
-    #         self.iter += 1
-    #     else:
-    #         print(f"Maximum iterations reached: {self.max_iter} with final loss {loss}.")
+                if self.iter < 1000:
+                    max_grad = 0.0
+                    for i in range(len(grads)):
+                        grad = grads[i].abs().max()
+                        if grad > max_grad:
+                            max_grad = grad
+                
+                    # if max_grad < 1e-2:
+                    #     self.learning_rate = self.learning_rate * 0.1 / (max_grad + 1e-30)
+                        
+                qctn.params = self.step(qctn, grads)
 
+                self.learning_rate = cache_lr
 
-    #     if 'target_qctn' in kwargs:
-    #         self.optimize(qctn, target_qctn=kwargs['target_qctn'])
-    #     elif 'inputs_list' in kwargs:
-    #         self.optimize_self_with_inputs(qctn, inputs_list=kwargs['inputs_list'])
-    #     elif 'circuit_array_input' in kwargs:
-    #         self.optimize_self_with_inputs(qctn, inputs_list=[kwargs['circuit_array_input']])
-    #     else:
-    #         raise ValueError("No valid optimization mode provided.")
+            self.iter += 1
+        else:
+            print(f"Maximum iterations reached: {self.max_iter} with final loss {loss_value}.")
 
-    def optimize(self, qctn, target_qctn):
+    def optimize_debug(self, qctn, data_list, **kwargs):
+        """
+        Optimize a function.
+        
+        Args:
+            qctn (QCTN): The quantum circuit tensor network to optimize.
+            kwargs: Additional arguments for different optimization modes.
+
+        Returns:
+            None: The function modifies the qctn in place.
+        """
+        debug = True
+        while self.iter < self.max_iter:
+            # if debug and self.iter % 10 == 0:
+            #     for i in range(len(qctn.cores_weights)):
+            #         print(f"\nCore {i} shape: {qctn.cores_weights[qctn.cores[i]].shape}")
+            #         print(f"\nCore {i} weights: {qctn.cores_weights[qctn.cores[i]].detach().cpu().numpy()}")
+
+            # TODO: impl general function named contract_for_gradient
+            data_index = self.iter % len(data_list)
+            loss, grads = self.executor.contract_with_self_for_gradient(qctn, **data_list[data_index], **kwargs)
+            
+            # if debug and self.iter % 10 == 0:
+            #     # for i in range(len(qctn.cores_weights)):
+            #     for i in range(1):
+            #         print(f"\ngrad {i} shape: {grads[i].shape}")
+            #         print(f"\ngrad {i} weight: {grads[i].detach().cpu().numpy()}")
+
+            # Convert loss to scalar for comparison and printing
+            loss_value = float(loss) if hasattr(loss, 'item') else loss
+            
+            if self.tol and loss_value < self.tol:
+                print(f"Convergence achieved at iteration {self.iter} with loss {loss_value}.")
+                break
+            
+            print(f"Iteration {self.iter}: loss = {loss_value}")
+
+            # Update parameters using the optimizer step
+            with torch.no_grad():
+                cache_lr = self.learning_rate
+                if self.iter < 1000:
+                    max_grad = 0.0
+                    for i in range(len(grads)):
+                        grad = grads[i].abs().max()
+                        if grad > max_grad:
+                            max_grad = grad
+                
+                    if max_grad < 1e-5:
+                        # self.learning_rate = self.learning_rate * 1e-2 / (max_grad + 1e-30)
+                        self.learning_rate = self.learning_rate / (max_grad + 1e-30) * 1e-9
+                    
+                    # if debug and self.iter % 10 == 0:
+                    print('max_grad:', max_grad, self.learning_rate)
+
+                # if self.iter < 1000:
+                #     max_grad = 0.0
+                #     for i in range(len(grads)):
+                #         grad = grads[i].abs().max()
+                #         if grad > max_grad:
+                #             max_grad = grad
+                #     if max_grad < 1e-3:
+                #         for i in range(len(grads)):
+                #             grads[i] = grads[i] / (max_grad + 1e-30) * 0.1
+                            
+
+                #     if debug and self.iter % 10 == 0:
+                #         print('max_grad:', max_grad)
+                #         # for i in range(len(qctn.cores_weights)):
+                #         # for i in range(1):
+                #         #     print(f"\nnorm grad {i} shape: {grads[i].shape}, {grads[i].dtype}")
+                #         #     print(f"\nnorm grad {i} weight: {grads[i].detach().cpu().numpy()}")
+
+                qctn.params = self.step(qctn, grads)
+
+                self.learning_rate = cache_lr
+            self.iter += 1
+
+            # if debug and self.iter % 10 == 1:
+            #     for i in range(len(qctn.cores_weights)):
+            #         print(f"\nres {i} shape: {qctn.cores_weights[qctn.cores[i]].shape}")
+            #         print(f"\nres {i} weights: {qctn.cores_weights[qctn.cores[i]].detach().cpu().numpy()}")
+
+        else:
+            print(f"Maximum iterations reached: {self.max_iter} with final loss {loss_value}.")
+
+    def optimize_with_target(self, qctn, target_qctn):
         """
         Optimize a function using JAX.
         
@@ -220,7 +320,7 @@ class Optimizer:
             None: The function modifies the qctn parameters in place.
         """
         for idx, c in enumerate(qctn.cores):
-            qctn.cores_weights[c] -= self.learning_rate * grads[idx]
+            qctn.cores_weights[c] = qctn.cores_weights[c] - self.learning_rate * grads[idx]
 
 
     def adam_step(self, qctn, grads):
@@ -236,8 +336,16 @@ class Optimizer:
         """
         # Initialize moment estimates
         if not hasattr(qctn, 'm'):
-            qctn.m = {c: jnp.zeros_like(w) for c, w in qctn.cores_weights.items()}
-            qctn.v = {c: jnp.zeros_like(w) for c, w in qctn.cores_weights.items()}
+            if self.executor.backend.get_backend_name() == 'jax':
+                qctn.m = {c: jnp.zeros_like(w) for c, w in qctn.cores_weights.items()}
+                qctn.v = {c: jnp.zeros_like(w) for c, w in qctn.cores_weights.items()}
+            elif self.executor.backend.get_backend_name() == 'pytorch':
+                device = self.executor.backend.backend_info.device
+
+                qctn.m = {c: torch.zeros_like(w, device=device) for c, w in qctn.cores_weights.items()}
+                qctn.v = {c: torch.zeros_like(w, device=device) for c, w in qctn.cores_weights.items()}
+
+
 
         for idx, c in enumerate(qctn.cores):
 
@@ -251,6 +359,9 @@ class Optimizer:
             m_hat = qctn.m[c] / (1 - self.beta1 ** (self.iter + 1))
             v_hat = qctn.v[c] / (1 - self.beta2 ** (self.iter + 1))
             
-            # Update parameters
-            qctn.cores_weights[c] -= self.learning_rate * m_hat / (jax.numpy.sqrt(v_hat) + self.epsilon)
+            sqrt_v_hat = jnp.sqrt(v_hat) if self.executor.backend.get_backend_name() == 'jax' else torch.sqrt(v_hat)
+            
+            # Update parameters (create new tensor instead of in-place operation)
+            update = self.learning_rate * m_hat / (sqrt_v_hat + self.epsilon)
+            qctn.cores_weights[c] = qctn.cores_weights[c] - update
         

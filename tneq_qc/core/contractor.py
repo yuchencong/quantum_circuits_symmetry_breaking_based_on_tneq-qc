@@ -265,17 +265,27 @@ class TensorContractor:
         return einsum_equation, tensor_shapes
 
     @staticmethod
-    def build_with_self_expression(qctn, circuit_array_input_shape=None) -> Tuple[str, List]:
+    def build_with_self_expression(qctn, circuit_states_shape=None, measure_shape=None, measure_is_matrix=False) -> Tuple[str, List]:
         """
         Build einsum expression for contracting QCTN with itself (hermitian conjugate).
         
         Args:
             qctn (QCTN): The quantum circuit tensor network to contract.
-            circuit_array_input_shape (tuple, optional): Shape of circuit array input.
+            circuit_states_shape (tuple or tuple of tuples, optional): Shape(s) of circuit states input.
+                Can be a single shape tuple or tuple of shape tuples for list inputs.
+            measure_shape (tuple or tuple of tuples, optional): Shape(s) of measurement input.
+                Can be a single shape tuple or tuple of shape tuples for list inputs.
+            measure_is_matrix (bool): If True, measure_input is the outer product matrix Mx;
+                If False, measure_input is the vector phi_x.
         
         Returns:
             tuple: (einsum_equation, tensor_shapes)
         """
+
+        # Determine if we have list inputs
+        is_states_list = isinstance(circuit_states_shape, tuple) and circuit_states_shape and isinstance(circuit_states_shape[0], tuple)
+        is_measure_list = isinstance(measure_shape, tuple) and measure_shape and isinstance(measure_shape[0], tuple)
+        
         input_ranks, adjacency_matrix, output_ranks = qctn.circuit
         cores_name = qctn.cores
 
@@ -320,14 +330,35 @@ class TensorContractor:
             einsum_equation_lefthand += core_equation
             equation_list.append(core_equation)
 
-        real_output_symbols_stack = []
+        middle_block_list = []
+        middle_symbols_mapping = {
+            char: char for char in output_symbols_stack
+        }
+        batch_symbol = ''
+        if measure_shape is not None:
+            # Add batch size dimension
+            batch_symbol = opt_einsum.get_symbol(symbol_id)
+            symbol_id += 1
+            
+            middle_block_list = []
+            for char in output_symbols_stack:
+                symbol = opt_einsum.get_symbol(symbol_id)
+                symbol_id += 1
 
+                middle_symbols_mapping[char] = symbol
+
+                middle_block_list += [batch_symbol + char + symbol]
+
+        # print('output_symbols_stack', output_symbols_stack)
+        # print('middle_block_list', middle_block_list)
+
+        real_output_symbols_stack = []
         inv_equation_list = []
         for core_equation in equation_list[::-1]:
             new_equation = ""
             for char in core_equation:
                 if char in output_symbols_stack:
-                    new_equation += char
+                    new_equation += middle_symbols_mapping[char]
                 else:
                     if char in new_symbol_mapping:
                         symbol = new_symbol_mapping[char]
@@ -343,21 +374,70 @@ class TensorContractor:
 
             inv_equation_list.append(new_equation)
 
-        equation_list += inv_equation_list
+        equation_list = equation_list + middle_block_list + inv_equation_list
 
         einsum_equation_lefthand = ",".join(equation_list)
+        
+        # Handle circuit_states and measure_input
+        if is_states_list:
+            circuit_states_symbols = ','.join(input_symbols_stack)
+            output_states_symbols = ','.join(real_output_symbols_stack)
+        else:
+            circuit_states_symbols = ''.join(input_symbols_stack)
+            output_states_symbols = ''.join(real_output_symbols_stack)
 
-        if circuit_array_input_shape is not None:
-            einsum_equation_output = ''.join(real_output_symbols_stack)
-            einsum_equation_lefthand = f"{''.join(input_symbols_stack)},{einsum_equation_lefthand},{einsum_equation_output}"
+        # Build equation parts
+        left_parts = []
+        
+        # Add circuit_states
+        if circuit_states_shape is not None:
+            left_parts.append(circuit_states_symbols)
+        
+        # Add cores equations
+        left_parts.append(einsum_equation_lefthand)
+        
+        # Add conjugate side inputs
+        if circuit_states_shape is not None:
+            left_parts.append(output_states_symbols)
+        
+        einsum_equation_lefthand = ",".join(left_parts)
 
-        einsum_equation = f'{einsum_equation_lefthand}->'
+        einsum_equation = f'{einsum_equation_lefthand}->{batch_symbol}'
 
-        tensor_shapes = [qctn.cores_weights[core_name].shape for core_name in cores_name] + \
-                        [qctn.cores_weights[core_name].shape for core_name in cores_name[::-1]]
+        tensor_shapes = [qctn.cores_weights[core_name].shape for core_name in cores_name]
+        inv_tensor_shapes = [qctn.cores_weights[core_name].shape for core_name in cores_name[::-1]]
 
-        if circuit_array_input_shape is not None:
-            tensor_shapes = [circuit_array_input_shape] + tensor_shapes + [circuit_array_input_shape]
+        # Prepare tensor_shapes list
+        shapes_list = []
+        
+        # Add circuit_states shapes
+        if circuit_states_shape is not None:
+            if is_states_list:
+                shapes_list.extend(list(circuit_states_shape))
+            else:
+                shapes_list.append(circuit_states_shape)
+        
+        # Add core shapes
+        shapes_list.extend(tensor_shapes)
+
+        # Add measure_input shapes
+        if measure_shape is not None:
+            if is_measure_list:
+                shapes_list.extend(list(measure_shape))
+            else:
+                shapes_list.append(measure_shape)
+        
+        # Add inverse core shapes
+        shapes_list.extend(inv_tensor_shapes)
+        
+        # Add conjugate side shapes
+        if circuit_states_shape is not None:
+            if is_states_list:
+                shapes_list.extend(list(circuit_states_shape))
+            else:
+                shapes_list.append(circuit_states_shape)
+        
+        tensor_shapes = shapes_list
 
         return einsum_equation, tensor_shapes
 
