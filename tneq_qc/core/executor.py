@@ -12,7 +12,7 @@ from typing import Optional, Union, List, Tuple, Dict, Any
 import numpy as np
 import torch
 
-from .contractor import EinsumStrategy, StrategyCompiler
+from ..contractor import EinsumStrategy, StrategyCompiler
 from ..backends.backend_factory import BackendFactory, ComputeBackend
 
 
@@ -26,7 +26,7 @@ class ContractExecutor:
     - ComputeBackend: Executes expressions using JAX, PyTorch, etc.
     """
 
-    def __init__(self, backend: Optional[Union[str, ComputeBackend]] = None, strategy_mode: str = 'fast'):
+    def __init__(self, backend: Optional[Union[str, ComputeBackend]] = None, strategy_mode: str = 'balanced'):
         """
         Initialize the executor with a specific backend and strategy mode.
         
@@ -55,7 +55,7 @@ class ContractExecutor:
     # ============================================================================
 
     def contract_with_compiled_strategy(self, qctn, circuit_states=None, measure_input=None, 
-                                       measure_is_matrix=False, force_recompile: bool = False):
+                                       measure_is_matrix=True, force_recompile: bool = False):
         """
         Contract using compiled strategy (auto-selected based on mode).
         
@@ -124,8 +124,8 @@ class ContractExecutor:
         
         return result
 
-    def contract_with_compiled_strategy_for_gradient(self, qctn, circuit_states=None, measure_input=None, 
-                                                    measure_is_matrix=False, force_recompile: bool = False) -> Tuple:
+    def contract_with_compiled_strategy_for_gradient(self, qctn, circuit_states_list=None, measure_input_list=None, 
+                                                    measure_is_matrix=True, force_recompile: bool = False) -> Tuple:
         """
         Contract using compiled strategy and compute gradients.
         
@@ -133,18 +133,93 @@ class ContractExecutor:
         
         Args:
             qctn (QCTN): The quantum circuit tensor network to contract.
-            circuit_states (array or list, optional): Circuit input states.
-            measure_input (array or list, optional): Measurement input.
+            circuit_states_list (array or list, optional): Circuit input states.
+            measure_input_list (array or list, optional): Measurement input.
             measure_is_matrix (bool): If True, measure_input is the outer product matrix.
             force_recompile (bool): Force recompilation even if cached.
         
         Returns:
             tuple: (loss, gradients)
         """
-        # TODO: Implement gradient computation with compiled strategies
-        # For now, fall back to contract_with_self_for_gradient
-        print("[Executor] contract_with_compiled_strategy_for_gradient not yet implemented, using fallback")
-        return self.contract_with_self_for_gradient(qctn, circuit_states, measure_input, measure_is_matrix)
+        circuit_states = circuit_states_list
+        measure_input = measure_input_list
+
+        # Prepare shapes_info
+        states_shape = None
+        if circuit_states is not None:
+            if isinstance(circuit_states, list):
+                circuit_states = [self.backend.convert_to_tensor(s) for s in circuit_states]
+                states_shape = tuple([s.shape for s in circuit_states])
+            else:
+                circuit_states = self.backend.convert_to_tensor(circuit_states)
+                states_shape = circuit_states.shape
+        
+        measure_shape = None
+        if measure_input is not None:
+            if isinstance(measure_input, list):
+                measure_input = [self.backend.convert_to_tensor(m) for m in measure_input]
+                measure_shape = tuple([m.shape for m in measure_input])
+            else:
+                measure_input = self.backend.convert_to_tensor(measure_input)
+                measure_shape = measure_input.shape
+        
+        shapes_info = {
+            'circuit_states_shapes': states_shape,
+            'measure_shapes': measure_shape,
+            'measure_is_matrix': measure_is_matrix
+        }
+        
+        # Check cache
+        cache_key = f'_compiled_strategy_{self.strategy_mode}_{states_shape}_{measure_shape}_{measure_is_matrix}'
+        
+        if force_recompile or not hasattr(qctn, cache_key):
+            # Compile strategy
+            compute_fn, strategy_name, cost = self.strategy_compiler.compile(qctn, shapes_info, self.backend)
+            
+            # Cache the result
+            setattr(qctn, cache_key, {
+                'compute_fn': compute_fn,
+                'strategy_name': strategy_name,
+                'cost': cost
+            })
+            print(f"[Executor] Compiled and cached strategy: {strategy_name}")
+        else:
+            cached = getattr(qctn, cache_key)
+            compute_fn = cached['compute_fn']
+            strategy_name = cached['strategy_name']
+            # print(f"[Executor] Using cached strategy: {strategy_name}")
+            
+        # Define loss function
+        def loss_fn(*core_tensors):
+            # Reconstruct cores_dict
+            cores_dict = {name: tensor for name, tensor in zip(qctn.cores, core_tensors)}
+            
+            # Execute contraction
+            result = compute_fn(cores_dict, circuit_states, measure_input)
+            
+            # Compute Cross Entropy loss
+            # Target is all ones (maximizing probability)
+            target = torch.ones_like(result)
+            
+            # Avoid log(0)
+            result = torch.clamp(result, min=1e-10)
+            log_result = torch.log(result)
+            return -torch.mean(target * log_result)
+        
+        # Prepare core tensors
+        core_tensors = [self.backend.convert_to_tensor(qctn.cores_weights[c]) for c in qctn.cores]
+        
+        # Compute gradients
+        # We want gradients with respect to all cores
+        argnums = list(range(len(core_tensors)))
+        
+        # Create value_and_grad function
+        value_and_grad_fn = self.backend.compute_value_and_grad(loss_fn, argnums=argnums)
+        
+        # Execute
+        loss, grads = value_and_grad_fn(*core_tensors)
+        
+        return loss, grads
 
     # ============================================================================
     # Legacy Methods (kept for backward compatibility)

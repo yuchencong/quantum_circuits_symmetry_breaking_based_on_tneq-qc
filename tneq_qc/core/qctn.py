@@ -66,7 +66,7 @@ class QCTNHelper:
                     graph += line + "\n"
                 return graph
 
-            return generate_std_graph(3)
+            return generate_std_graph(2)
         
             # return  "-3-A-3-"
             # return  "-3-A-3-B-3-C-3-D-3-"
@@ -262,7 +262,12 @@ class QCTN:
         
         import opt_einsum
 
-        self.cores = [opt_einsum.get_symbol(i) for i in range(self.nqubits-1)]
+        full_cores = set([opt_einsum.get_symbol(i) for i in range(2000)])
+        self.cores = list(set([c for c in graph if c in full_cores]))
+
+
+        # self.cores = [opt_einsum.get_symbol(i) for i in range(self.nqubits-1)]
+
 
         # self.cores = list(set([c for c in graph if c.isupper()]))
         # if not self.cores:
@@ -341,42 +346,69 @@ class QCTN:
 
     def _circuit_to_adjacency(self,):
         """
-        Convert the quantum circuit graph to an adjacency matrix.
+        Convert the quantum circuit graph to adjacency table.
         
-        Returns:
-            np.ndarray: Adjacency matrix representing the quantum circuit.
+        This method builds self.adjacency_table, a list where each element corresponds to a core
+        and contains a dict with:
+        - 'core_idx': int, index of the core
+        - 'core_name': str, name of the core
+        - 'in_edge_list': list of dicts with keys:
+            {'neighbor_idx', 'neighbor_name', 'edge_rank', 'qubit_idx'}
+            For input edges (from circuit input), neighbor_idx = -1, neighbor_name = ""
+        - 'out_edge_list': list of dicts with keys:
+            {'neighbor_idx', 'neighbor_name', 'edge_rank', 'qubit_idx'}
+            For output edges (to circuit output), neighbor_idx = -1, neighbor_name = ""
+        - 'input_shape': list of input ranks (from in_edge_list)
+        - 'output_shape': list of output ranks (from out_edge_list)
+        - 'input_dim': int, product of input_shape
+        - 'output_dim': int, product of output_shape
         """
-        self.adjacency_matrix = np.empty((self.ncores, self.ncores), dtype=object)
-        for i in range(self.ncores):
-            for j in range(self.ncores):
-                self.adjacency_matrix[i, j] = []
-        input_ranks = np.empty(self.ncores, dtype=object)
-        output_ranks = np.empty(self.ncores, dtype=object)
-        for i in range(self.ncores):
-            input_ranks[i] = []
-            output_ranks[i] = []
-
+        
         cores = "".join(self.cores)
         dict_core2idx = {core: idx for idx, core in enumerate(self.cores)}
+        self.dict_core2idx = dict_core2idx  # Store for later use
+        
+        # Initialize adjacency_table
+        self.adjacency_table = []
+        for idx, core_name in enumerate(self.cores):
+            self.adjacency_table.append({
+                'core_idx': idx,
+                'core_name': core_name,
+                'in_edge_list': [],
+                'out_edge_list': [],
+                'input_shape': [],
+                'output_shape': [],
+                'input_dim': 1,
+                'output_dim': 1,
+            })
+        
         input_pattern = re.compile(rf"^(\d+)([{cores}])")
         output_pattern = re.compile(rf"([{cores}])(\d+)$")
         connect_pattern = re.compile(rf"([{cores}])(\d+)(?=[{cores}])")
 
-        # print(f"Input Pattern: {input_pattern.pattern}")
-        # print(f"Output Pattern: {output_pattern.pattern}")
-        # print(f"Connect Pattern: {connect_pattern.pattern}")
-
-        for line in self.qubits:
+        for qubit_idx, line in enumerate(self.qubits):
             line = line.strip().replace("-", "")
-            # print(f"Processing line: {line}")
             input_rank, input_core = input_pattern.match(line).groups()
-            # print(f"Input Core: {input_core}, Input Rank: {input_rank}")
             output_core, output_rank = output_pattern.search(line).groups()
             input_rank, output_rank = int(input_rank), int(output_rank)
             input_core_idx = dict_core2idx[input_core]
             output_core_idx = dict_core2idx[output_core]
-            input_ranks[input_core_idx].append(input_rank)
-            output_ranks[output_core_idx].append(output_rank)
+            
+            # Add input edge: from circuit input (-1, "") to input_core
+            self.adjacency_table[input_core_idx]['in_edge_list'].append({
+                'neighbor_idx': -1,
+                'neighbor_name': "",
+                'edge_rank': input_rank,
+                'qubit_idx': qubit_idx
+            })
+            
+            # Add output edge: from output_core to circuit output (-1, "")
+            self.adjacency_table[output_core_idx]['out_edge_list'].append({
+                'neighbor_idx': -1,
+                'neighbor_name': "",
+                'edge_rank': output_rank,
+                'qubit_idx': qubit_idx
+            })
             
             for match in connect_pattern.finditer(line):
                 end_pos = match.end()
@@ -384,36 +416,94 @@ class QCTN:
                     print(f"Warning: end_pos {end_pos} out of range for line '{line}'")
                     break
 
-                # print(f"match found: {match.groups()} {line[end_pos]}")
                 core1, rank1 = match.groups()
                 core2 = line[end_pos]
 
                 core1_idx = dict_core2idx[core1]
                 core2_idx = dict_core2idx[core2]
                 rank1 = int(rank1)
-                self.adjacency_matrix[core1_idx, core2_idx].append(rank1)
-                self.adjacency_matrix[core2_idx, core1_idx].append(rank1)
+                
+                # Add to adjacency table
+                # core1 -> core2: out_edge for core1, in_edge for core2
+                self.adjacency_table[core1_idx]['out_edge_list'].append({
+                    'neighbor_idx': core2_idx,
+                    'neighbor_name': core2,
+                    'edge_rank': rank1,
+                    'qubit_idx': qubit_idx
+                })
+                self.adjacency_table[core2_idx]['in_edge_list'].append({
+                    'neighbor_idx': core1_idx,
+                    'neighbor_name': core1,
+                    'edge_rank': rank1,
+                    'qubit_idx': qubit_idx
+                })
 
+        # Compute input_shape, output_shape, input_dim, output_dim for each core
+        for core_info in self.adjacency_table:
+            core_info['input_shape'] = [edge['edge_rank'] for edge in core_info['in_edge_list']]
+            core_info['output_shape'] = [edge['edge_rank'] for edge in core_info['out_edge_list']]
+            core_info['input_dim'] = int(np.prod(core_info['input_shape'])) if core_info['input_shape'] else 1
+            core_info['output_dim'] = int(np.prod(core_info['output_shape'])) if core_info['output_shape'] else 1
+
+        # Build adjacency_matrix from adjacency_table for backward compatibility
+        self.adjacency_matrix = np.empty((self.ncores, self.ncores), dtype=object)
+        for i in range(self.ncores):
+            for j in range(self.ncores):
+                self.adjacency_matrix[i, j] = []
+        
+        for core_info in self.adjacency_table:
+            core_idx = core_info['core_idx']
+            for edge in core_info['out_edge_list']:
+                if edge['neighbor_idx'] >= 0:  # Skip output edges (to circuit output)
+                    self.adjacency_matrix[core_idx, edge['neighbor_idx']].append(edge['edge_rank'])
+                    self.adjacency_matrix[edge['neighbor_idx'], core_idx].append(edge['edge_rank'])
+
+        # Build circuit tuple for backward compatibility
+        input_ranks = np.empty(self.ncores, dtype=object)
+        output_ranks = np.empty(self.ncores, dtype=object)
+        for i in range(self.ncores):
+            input_ranks[i] = self.adjacency_table[i]['input_shape'].copy()
+            output_ranks[i] = self.adjacency_table[i]['output_shape'].copy()
         self.circuit = (input_ranks, self.adjacency_matrix, output_ranks)
+
+        # for debug, print adjacency_table
+        for core_info in self.adjacency_table:
+            print(f"Core {core_info['core_name']} (idx {core_info['core_idx']}):")
+            print(f"  input_shape: {core_info['input_shape']}, output_shape: {core_info['output_shape']}")
+            print(f"  input_dim: {core_info['input_dim']}, output_dim: {core_info['output_dim']}")
+            print(f"  In edges: {core_info['in_edge_list']}")
+            print(f"  Out edges: {core_info['out_edge_list']}")
 
     def _init_cores(self):
         """
         Initialize the cores of the quantum circuit with random values.
         
+        For each core, use the pre-computed values from adjacency_table:
+        - input_shape: ranks from in_edge_list (already ordered by qubit_idx)
+        - output_shape: ranks from out_edge_list (already ordered by qubit_idx)
+        - input_dim: product of input_shape
+        - output_dim: product of output_shape
+        
+        The core tensor is initialized with shape [input_dim, output_dim], 
+        then reshaped to input_shape + output_shape.
+        
         Returns:
             None: The cores are stored in the `cores_weights` attribute.
         """
 
-        for idx, core_name in enumerate(self.cores):
-            # These ranks should be expressed as lists of integers ordered by the qubits.
-            # Therefore we conduct "+" on all of these ranks to obtain the shape of the core.
-            input_rank = self.circuit[0][idx]
-            output_rank = self.circuit[2][idx]
-            adjacency_ranks = self.adjacency_matrix[idx, :]
-
-            core_shape = input_rank + list(itertools.chain.from_iterable(adjacency_ranks)) + output_rank
-
-            core = self.backend.init_random_core(core_shape)
+        for core_info in self.adjacency_table:
+            core_name = core_info['core_name']
+            input_shape = core_info['input_shape']
+            output_shape = core_info['output_shape']
+            input_dim = core_info['input_dim']
+            output_dim = core_info['output_dim']
+            
+            # Initialize core with shape [input_dim, output_dim]
+            core = self.backend.init_random_core([input_dim, output_dim])
+            
+            # Reshape to input_shape + output_shape
+            full_shape = input_shape + output_shape
+            core = self.backend.reshape(core, full_shape)
 
             self.cores_weights[core_name] = core
 

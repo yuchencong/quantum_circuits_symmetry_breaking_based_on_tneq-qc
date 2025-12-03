@@ -352,3 +352,7 @@ class BackendPyTorch(ComputeBackend):
         if not isinstance(tensor, self.torch.Tensor):
             tensor = self.torch.as_tensor(tensor)
         return tensor.detach().cpu().numpy()
+
+    def reshape(self, tensor, shape):
+        """Reshape tensor to the given shape."""
+        return tensor.reshape(shape)

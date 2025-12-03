@@ -155,3 +155,7 @@ class BackendJAX(ComputeBackend):
 
     def tensor_to_numpy(self, tensor):
         return np.asarray(tensor)
+
+    def reshape(self, tensor, shape):
+        """Reshape tensor to the given shape."""
+        return self.jnp.reshape(tensor, shape)

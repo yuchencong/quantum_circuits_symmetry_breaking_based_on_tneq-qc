@@ -198,3 +198,17 @@ class ComputeBackend(ABC):
             seed: Integer seed value.
         """
         pass
+
+    @abstractmethod
+    def reshape(self, tensor, shape):
+        """
+        Reshape a tensor to the given shape.
+        
+        Args:
+            tensor: Backend-specific tensor.
+            shape: New shape (list or tuple of ints).
+        
+        Returns:
+            Reshaped tensor.
+        """
+        pass

@@ -74,7 +74,8 @@ class Optimizer:
             # TODO: impl general function named contract_for_gradient
             data_index = self.iter % len(data_list)
             # loss, grads = self.executor.contract_with_self_for_gradient(qctn, **data_list[data_index], **kwargs)
-            loss, grads = self.executor.contract_with_std_graph_for_gradient(qctn, **data_list[data_index], **kwargs)
+            # loss, grads = self.executor.contract_with_std_graph_for_gradient(qctn, **data_list[data_index], **kwargs)
+            loss, grads = self.executor.contract_with_compiled_strategy_for_gradient(qctn, **data_list[data_index], **kwargs)
 
             # Convert loss to scalar for comparison and printing
             loss_value = float(loss) if hasattr(loss, 'item') else loss
