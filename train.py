@@ -82,7 +82,8 @@ def generate_Mx_phi_x_data(num_batch, batch_size, num_qubits, K):
 
         out = weights * torch.sqrt(torch.exp(- torch.square(x) / 2))[:, :, None] * out
 
-        print(f'phi_x.shape {out.shape}')
+        # print(f'phi_x.shape {out.shape}')
+
         # out_norm = torch.sum(out * out, dim=-1)
         # out = out / torch.sqrt(out_norm)[:, :, None]
 
@@ -91,7 +92,8 @@ def generate_Mx_phi_x_data(num_batch, batch_size, num_qubits, K):
         Mx = torch.einsum(einsum_expr,
                           out, out)
         # print(f"Mx : {Mx}, Mx.shape: {Mx.shape}")
-        print(f"Mx.shape: {Mx.shape}")
+
+        # print(f"Mx.shape: {Mx.shape}")
 
         Mx_list = [Mx[:, i] for i in range(num_qubits)]
         data_list += [(Mx_list, out)]
@@ -123,17 +125,17 @@ if __name__ == "__main__":
     engine = EngineSiamese(backend=backend_type, strategy_mode="balanced")
 
     qctn_graph = QCTNHelper.generate_example_graph()
-    print(f"qctn_graph: \n{qctn_graph}")
+    # print(f"qctn_graph: \n{qctn_graph}")
     qctn = QCTN(qctn_graph, backend=engine.backend)
 
-    N = 20
-    B = 512
+    N = 1
+    B = 4096 * 16
     D = qctn.nqubits
     K = 3
 
     data_list = generate_Mx_phi_x_data(num_batch=N, batch_size=B, num_qubits=D, K=K)
 
-    print('data_list[0] shape:', data_list[0][-1].shape)
+    # print('data_list[0] shape:', data_list[0][-1].shape)
 
     # for i in range(B):
     #     phi_x = data_list[0][-1][i]

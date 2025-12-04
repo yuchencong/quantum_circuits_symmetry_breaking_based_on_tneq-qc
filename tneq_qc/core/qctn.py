@@ -66,7 +66,7 @@ class QCTNHelper:
                     graph += line + "\n"
                 return graph
 
-            return generate_std_graph(3)
+            return generate_std_graph(1024)
         
             # return  "-3-A-3-"
             # return  "-3-A-3-B-3-C-3-D-3-"
@@ -263,9 +263,11 @@ class QCTN:
         self.nqubits = len(self.qubits)
         
         import opt_einsum
+        full_cores = set([opt_einsum.get_symbol(i) for i in range(10000)])
+        # full_cores = set([next(QCTNHelper.iter_symbols(True)) for _ in range(20000)])
 
-        full_cores = set([opt_einsum.get_symbol(i) for i in range(2000)])
         self.cores = list(set([c for c in graph if c in full_cores]))
+        print(f"num cores: {len(self.cores)}")
 
 
         # self.cores = [opt_einsum.get_symbol(i) for i in range(self.nqubits-1)]
@@ -389,6 +391,9 @@ class QCTN:
         connect_pattern = re.compile(rf"([{cores}])(\d+)(?=[{cores}])")
 
         for qubit_idx, line in enumerate(self.qubits):
+            # print(f'qubit_idx: {qubit_idx}, line: {len(line)}, {line[-10:]}')
+            # if qubit_idx == 2000:
+            #     print(line)
             line = line.strip().replace("-", "")
             input_rank, input_core = input_pattern.match(line).groups()
             output_core, output_rank = output_pattern.search(line).groups()
@@ -469,12 +474,12 @@ class QCTN:
         self.circuit = (input_ranks, self.adjacency_matrix, output_ranks)
 
         # for debug, print adjacency_table
-        for core_info in self.adjacency_table:
-            print(f"Core {core_info['core_name']} (idx {core_info['core_idx']}):")
-            print(f"  input_shape: {core_info['input_shape']}, output_shape: {core_info['output_shape']}")
-            print(f"  input_dim: {core_info['input_dim']}, output_dim: {core_info['output_dim']}")
-            print(f"  In edges: {core_info['in_edge_list']}")
-            print(f"  Out edges: {core_info['out_edge_list']}")
+        # for core_info in self.adjacency_table:
+        #     print(f"Core {core_info['core_name']} (idx {core_info['core_idx']}):")
+        #     print(f"  input_shape: {core_info['input_shape']}, output_shape: {core_info['output_shape']}")
+        #     print(f"  input_dim: {core_info['input_dim']}, output_dim: {core_info['output_dim']}")
+        #     print(f"  In edges: {core_info['in_edge_list']}")
+        #     print(f"  Out edges: {core_info['out_edge_list']}")
 
     def _init_cores(self):
         """
@@ -493,13 +498,15 @@ class QCTN:
             None: The cores are stored in the `cores_weights` attribute.
         """
 
-        for core_info in self.adjacency_table:
+        for idx, core_info in enumerate(self.adjacency_table):
             core_name = core_info['core_name']
             input_shape = core_info['input_shape']
             output_shape = core_info['output_shape']
             input_dim = core_info['input_dim']
             output_dim = core_info['output_dim']
             
+            # print(f"_init_cores: {idx} {input_shape} {output_shape} {input_dim} {output_dim}")
+
             # Initialize core with shape [input_dim, output_dim]
             core = self.backend.init_random_core([input_dim, output_dim])
             
