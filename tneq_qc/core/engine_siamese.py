@@ -10,7 +10,6 @@ Now supports strategy-based compilation for optimized contraction paths.
 from __future__ import annotations
 from typing import Optional, Union, List, Tuple, Dict, Any
 import numpy as np
-import torch
 
 from ..contractor import EinsumStrategy, StrategyCompiler, GreedyStrategy
 from ..backends.backend_factory import BackendFactory, ComputeBackend
@@ -168,12 +167,12 @@ class EngineSiamese:
             
             # Compute Cross Entropy loss
             # Target is all ones (maximizing probability)
-            target = torch.ones_like(result)
+            target = self.backend.ones(result.shape, dtype=result.dtype)
             
             # Avoid log(0)
-            result = torch.clamp(result, min=1e-10)
-            log_result = torch.log(result)
-            return -torch.mean(target * log_result)
+            result = self.backend.clamp(result, min=1e-10)
+            log_result = self.backend.log(result)
+            return -self.backend.mean(target * log_result)
         
         # Prepare core tensors
         core_tensors = [self.backend.convert_to_tensor(qctn.cores_weights[c]) for c in qctn.cores]
@@ -252,7 +251,8 @@ class EngineSiamese:
             if measure_input_list[0].ndim == 3:
                 has_batch = True
                 batch_size = measure_input_list[0].shape[0]
-                ident = ident.unsqueeze(0).expand(batch_size, -1, -1)
+                ident = self.backend.unsqueeze(ident, 0)
+                ident = self.backend.expand(ident, batch_size, -1, -1)
 
         for i in range(qctn.nqubits):
             if i in qubit_indices:
@@ -301,7 +301,8 @@ class EngineSiamese:
             if measure_input_list[0].ndim == 3:
                 has_batch = True
                 batch_size = measure_input_list[0].shape[0]
-                ident = ident.unsqueeze(0).expand(batch_size, -1, -1)
+                ident = self.backend.unsqueeze(ident, 0)
+                ident = self.backend.expand(ident, batch_size, -1, -1)
 
         # Prepare stacked measurements
         # We want output shape (B, 2) -> effectively batch size 2*B? Or B*2?
@@ -321,13 +322,13 @@ class EngineSiamese:
                 if i in target_indices:
                     # Target qubit: [Measure, Identity]
                     # Stack along dim 1
-                    stacked = torch.stack([measure_tensor, ident], dim=1) # (B, 2, K, K)
+                    stacked = self.backend.stack([measure_tensor, ident], dim=1) # (B, 2, K, K)
                 else:
                     # Condition qubit: [Measure, Measure]
-                    stacked = torch.stack([measure_tensor, measure_tensor], dim=1) # (B, 2, K, K)
+                    stacked = self.backend.stack([measure_tensor, measure_tensor], dim=1) # (B, 2, K, K)
             else:
                 # Unused qubit: [Identity, Identity]
-                stacked = torch.stack([ident, ident], dim=1) # (B, 2, K, K)
+                stacked = self.backend.stack([ident, ident], dim=1) # (B, 2, K, K)
             
             full_measure_input_list.append(stacked)
         
@@ -373,11 +374,14 @@ class EngineSiamese:
         # Initialize measure_input_list with Identities
         # Shape: (B, dim, dim)
         ident = self.backend.eye(dim)
-        ident_batch = ident.unsqueeze(0).expand(num_samples, -1, -1)
+        ident_batch = self.backend.unsqueeze(ident, 0)
+        ident_batch = self.backend.expand(ident_batch, num_samples, -1, -1)
         
-        measure_input_list = [ident_batch.clone() for _ in range(qctn.nqubits)]
+        measure_input_list = [self.backend.clone(ident_batch) for _ in range(qctn.nqubits)]
         
-        res = torch.zeros((num_samples, qctn.nqubits), dtype=torch.long, device="cuda")
+        # Create result tensor for storing sampled indices (integer type)
+        # For PyTorch: torch.long, For JAX: jnp.int32
+        res_list = []
         
         for i in range(qctn.nqubits):
             measure_input_list[i] = None
@@ -392,25 +396,28 @@ class EngineSiamese:
             print(f"[EngineSiamese] Sampling qubit {i}, rho_i shape: {rho_i.shape}")
 
             # Extract diagonal and normalize
-            probs_unnorm = torch.diagonal(rho_i, dim1=-2, dim2=-1) # (B, dim)
+            probs_unnorm = self.backend.diagonal(rho_i, dim1=-2, dim2=-1) # (B, dim)
             
             # Handle negative values (numerical noise) and normalize
-            probs_unnorm = torch.clamp(probs_unnorm, min=0.0)
-            norms = torch.sum(probs_unnorm, dim=-1, keepdim=True)
+            probs_unnorm = self.backend.clamp(probs_unnorm, min=0.0)
+            norms = self.backend.sum(probs_unnorm, dim=-1, keepdim=True)
             probs = probs_unnorm / (norms + 1e-10)
 
-            print(f"[EngineSiamese] Qubit {i}, probs sum (should be 1): {torch.sum(probs, dim=-1)}, probs: {probs}")
+            print(f"[EngineSiamese] Qubit {i}, probs sum (should be 1): {self.backend.sum(probs, dim=-1)}, probs: {probs}")
             
             # Sample
-            sampled_indices = torch.multinomial(probs, num_samples=1) # (B, 1)
-            res[:, i] = sampled_indices.squeeze(-1)
+            sampled_indices = self.backend.multinomial(probs, num_samples=1) # (B, 1)
+            sampled_indices_1d = self.backend.squeeze(sampled_indices, dim=-1)
+            res_list.append(sampled_indices_1d)
             
             # Update measure_input_list[i] with projector |k><k|
-            new_measure = torch.zeros((num_samples, dim, dim), dtype=probs.dtype, device="cuda")
-            indices = sampled_indices.squeeze(-1)
-            batch_indices = torch.arange(num_samples, device="cuda")
-            new_measure[batch_indices, indices, indices] = 1.0
+            new_measure = self.backend.zeros((num_samples, dim, dim), dtype=probs.dtype)
+            batch_indices = self.backend.arange(num_samples)
+            new_measure[batch_indices, sampled_indices_1d, sampled_indices_1d] = 1.0
             
             measure_input_list[i] = new_measure
-            
+        
+        # Stack all sampled indices into a single tensor of shape (num_samples, nqubits)
+        res = self.backend.stack(res_list, dim=1)
+        
         return res

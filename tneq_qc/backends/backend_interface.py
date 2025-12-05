@@ -226,3 +226,201 @@ class ComputeBackend(ABC):
             Identity matrix tensor.
         """
         pass
+
+    @abstractmethod
+    def zeros(self, shape, dtype=None):
+        """
+        Create a tensor filled with zeros.
+        
+        Args:
+            shape: Shape of the tensor (tuple or list).
+            dtype: Data type of the tensor.
+            
+        Returns:
+            Zero-filled tensor.
+        """
+        pass
+
+    @abstractmethod
+    def ones(self, shape, dtype=None):
+        """
+        Create a tensor filled with ones.
+        
+        Args:
+            shape: Shape of the tensor (tuple or list).
+            dtype: Data type of the tensor.
+            
+        Returns:
+            One-filled tensor.
+        """
+        pass
+
+    @abstractmethod
+    def clone(self, tensor):
+        """
+        Create a copy of the tensor.
+        
+        Args:
+            tensor: Tensor to clone.
+            
+        Returns:
+            Cloned tensor.
+        """
+        pass
+
+    @abstractmethod
+    def unsqueeze(self, tensor, dim):
+        """
+        Add a dimension of size 1 at the specified position.
+        
+        Args:
+            tensor: Input tensor.
+            dim: Position where to add the dimension.
+            
+        Returns:
+            Tensor with added dimension.
+        """
+        pass
+
+    @abstractmethod
+    def expand(self, tensor, *sizes):
+        """
+        Expand tensor to a larger size by broadcasting.
+        
+        Args:
+            tensor: Input tensor.
+            *sizes: Target sizes for each dimension (-1 means no change).
+            
+        Returns:
+            Expanded tensor.
+        """
+        pass
+
+    @abstractmethod
+    def clamp(self, tensor, min=None, max=None):
+        """
+        Clamp tensor values to a range.
+        
+        Args:
+            tensor: Input tensor.
+            min: Minimum value (optional).
+            max: Maximum value (optional).
+            
+        Returns:
+            Clamped tensor.
+        """
+        pass
+
+    @abstractmethod
+    def diagonal(self, tensor, dim1=-2, dim2=-1):
+        """
+        Extract diagonal from a tensor.
+        
+        Args:
+            tensor: Input tensor.
+            dim1: First dimension for diagonal.
+            dim2: Second dimension for diagonal.
+            
+        Returns:
+            Diagonal elements.
+        """
+        pass
+
+    @abstractmethod
+    def sum(self, tensor, dim=None, keepdim=False):
+        """
+        Sum tensor elements along specified dimension(s).
+        
+        Args:
+            tensor: Input tensor.
+            dim: Dimension(s) to sum over (None means all).
+            keepdim: Whether to keep the reduced dimension.
+            
+        Returns:
+            Summed tensor.
+        """
+        pass
+
+    @abstractmethod
+    def multinomial(self, probs, num_samples):
+        """
+        Sample from multinomial distribution.
+        
+        Args:
+            probs: Probability distribution tensor (last dim is the distribution).
+            num_samples: Number of samples to draw.
+            
+        Returns:
+            Sampled indices.
+        """
+        pass
+
+    @abstractmethod
+    def arange(self, *args, dtype=None):
+        """
+        Create a 1-D tensor with evenly spaced values.
+        
+        Args:
+            *args: start, end, step (like Python range).
+            dtype: Data type of the tensor.
+            
+        Returns:
+            1-D tensor with evenly spaced values.
+        """
+        pass
+
+    @abstractmethod
+    def stack(self, tensors, dim=0):
+        """
+        Stack tensors along a new dimension.
+        
+        Args:
+            tensors: List of tensors to stack.
+            dim: Dimension along which to stack.
+            
+        Returns:
+            Stacked tensor.
+        """
+        pass
+
+    @abstractmethod
+    def log(self, tensor):
+        """
+        Compute natural logarithm element-wise.
+        
+        Args:
+            tensor: Input tensor.
+            
+        Returns:
+            Logarithm of tensor.
+        """
+        pass
+
+    @abstractmethod
+    def mean(self, tensor, dim=None, keepdim=False):
+        """
+        Compute mean of tensor elements.
+        
+        Args:
+            tensor: Input tensor.
+            dim: Dimension(s) to reduce (None means all).
+            keepdim: Whether to keep the reduced dimension.
+            
+        Returns:
+            Mean tensor.
+        """
+        pass
+
+    @abstractmethod
+    def squeeze(self, tensor, dim=None):
+        """
+        Remove dimensions of size 1.
+        
+        Args:
+            tensor: Input tensor.
+            dim: Dimension to squeeze (None means all size-1 dims).
+            
+        Returns:
+            Squeezed tensor.
+        """
+        pass

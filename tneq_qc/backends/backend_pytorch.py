@@ -362,3 +362,67 @@ class BackendPyTorch(ComputeBackend):
         if dtype is None:
             dtype = self.torch.float32
         return self.torch.eye(n, dtype=dtype, device=self.backend_info.device)
+
+    def zeros(self, shape, dtype=None):
+        """Create a tensor filled with zeros."""
+        if dtype is None:
+            dtype = self.torch.float32
+        return self.torch.zeros(shape, dtype=dtype, device=self.backend_info.device)
+
+    def ones(self, shape, dtype=None):
+        """Create a tensor filled with ones."""
+        if dtype is None:
+            dtype = self.torch.float32
+        return self.torch.ones(shape, dtype=dtype, device=self.backend_info.device)
+
+    def clone(self, tensor):
+        """Create a copy of the tensor."""
+        return tensor.clone()
+
+    def unsqueeze(self, tensor, dim):
+        """Add a dimension of size 1 at the specified position."""
+        return tensor.unsqueeze(dim)
+
+    def expand(self, tensor, *sizes):
+        """Expand tensor to a larger size by broadcasting."""
+        return tensor.expand(*sizes)
+
+    def clamp(self, tensor, min=None, max=None):
+        """Clamp tensor values to a range."""
+        return self.torch.clamp(tensor, min=min, max=max)
+
+    def diagonal(self, tensor, dim1=-2, dim2=-1):
+        """Extract diagonal from a tensor."""
+        return self.torch.diagonal(tensor, dim1=dim1, dim2=dim2)
+
+    def sum(self, tensor, dim=None, keepdim=False):
+        """Sum tensor elements along specified dimension(s)."""
+        return self.torch.sum(tensor, dim=dim, keepdim=keepdim)
+
+    def multinomial(self, probs, num_samples):
+        """Sample from multinomial distribution."""
+        return self.torch.multinomial(probs, num_samples=num_samples)
+
+    def arange(self, *args, dtype=None):
+        """Create a 1-D tensor with evenly spaced values."""
+        if dtype is None:
+            dtype = self.torch.long
+        return self.torch.arange(*args, dtype=dtype, device=self.backend_info.device)
+
+    def stack(self, tensors, dim=0):
+        """Stack tensors along a new dimension."""
+        return self.torch.stack(tensors, dim=dim)
+
+    def log(self, tensor):
+        """Compute natural logarithm element-wise."""
+        return self.torch.log(tensor)
+
+    def mean(self, tensor, dim=None, keepdim=False):
+        """Compute mean of tensor elements."""
+        return self.torch.mean(tensor, dim=dim, keepdim=keepdim)
+
+    def squeeze(self, tensor, dim=None):
+        """Remove dimensions of size 1."""
+        if dim is None:
+            return tensor.squeeze()
+        return tensor.squeeze(dim)

@@ -174,3 +174,126 @@ class BackendJAX(ComputeBackend):
                 tensor = self.jax.device_put(tensor, devices[0])
                 
         return tensor
+
+    def zeros(self, shape, dtype=None):
+        """Create a tensor filled with zeros."""
+        if dtype is None:
+            dtype = self.jnp.float32
+        
+        tensor = self.jnp.zeros(shape, dtype=dtype)
+        
+        # Device placement if GPU
+        if self.backend_info.device and 'gpu' in self.backend_info.device.lower():
+            devices = self.jax.devices('gpu')
+            if devices:
+                tensor = self.jax.device_put(tensor, devices[0])
+                
+        return tensor
+
+    def ones(self, shape, dtype=None):
+        """Create a tensor filled with ones."""
+        if dtype is None:
+            dtype = self.jnp.float32
+        
+        tensor = self.jnp.ones(shape, dtype=dtype)
+        
+        # Device placement if GPU
+        if self.backend_info.device and 'gpu' in self.backend_info.device.lower():
+            devices = self.jax.devices('gpu')
+            if devices:
+                tensor = self.jax.device_put(tensor, devices[0])
+                
+        return tensor
+
+    def clone(self, tensor):
+        """Create a copy of the tensor."""
+        return self.jnp.copy(tensor)
+
+    def unsqueeze(self, tensor, dim):
+        """Add a dimension of size 1 at the specified position."""
+        return self.jnp.expand_dims(tensor, axis=dim)
+
+    def expand(self, tensor, *sizes):
+        """Expand tensor to a larger size by broadcasting."""
+        return self.jnp.broadcast_to(tensor, sizes)
+
+    def clamp(self, tensor, min=None, max=None):
+        """Clamp tensor values to a range."""
+        return self.jnp.clip(tensor, a_min=min, a_max=max)
+
+    def diagonal(self, tensor, dim1=-2, dim2=-1):
+        """Extract diagonal from a tensor."""
+        # JAX diagonal is a bit different, need to handle axes
+        ndim = tensor.ndim
+        axis1 = dim1 if dim1 >= 0 else ndim + dim1
+        axis2 = dim2 if dim2 >= 0 else ndim + dim2
+        return self.jnp.diagonal(tensor, axis1=axis1, axis2=axis2)
+
+    def sum(self, tensor, dim=None, keepdim=False):
+        """Sum tensor elements along specified dimension(s)."""
+        return self.jnp.sum(tensor, axis=dim, keepdims=keepdim)
+
+    def multinomial(self, probs, num_samples):
+        """Sample from multinomial distribution."""
+        # Split key for random sampling
+        self.key, subkey = self.jax.random.split(self.key)
+        
+        # JAX's categorical sampler expects shape (batch_size,) for probs
+        # and returns samples of shape (batch_size,) when num_samples=1
+        # For consistency with PyTorch, we need to handle this
+        batch_shape = probs.shape[:-1]
+        num_categories = probs.shape[-1]
+        
+        # Flatten batch dimensions
+        probs_flat = probs.reshape(-1, num_categories)
+        batch_size = probs_flat.shape[0]
+        
+        # Generate random keys for each batch item
+        subkeys = self.jax.random.split(subkey, batch_size)
+        
+        # Sample for each batch item
+        samples = []
+        for i in range(batch_size):
+            sample = self.jax.random.categorical(subkeys[i], self.jnp.log(probs_flat[i]), shape=(num_samples,))
+            samples.append(sample)
+        
+        samples = self.jnp.stack(samples, axis=0)  # Shape: (batch_size, num_samples)
+        
+        # Reshape back to original batch shape
+        if batch_shape:
+            samples = samples.reshape(*batch_shape, num_samples)
+        
+        return samples
+
+    def arange(self, *args, dtype=None):
+        """Create a 1-D tensor with evenly spaced values."""
+        if dtype is None:
+            dtype = self.jnp.int32
+        
+        tensor = self.jnp.arange(*args, dtype=dtype)
+        
+        # Device placement if GPU
+        if self.backend_info.device and 'gpu' in self.backend_info.device.lower():
+            devices = self.jax.devices('gpu')
+            if devices:
+                tensor = self.jax.device_put(tensor, devices[0])
+                
+        return tensor
+
+    def stack(self, tensors, dim=0):
+        """Stack tensors along a new dimension."""
+        return self.jnp.stack(tensors, axis=dim)
+
+    def log(self, tensor):
+        """Compute natural logarithm element-wise."""
+        return self.jnp.log(tensor)
+
+    def mean(self, tensor, dim=None, keepdim=False):
+        """Compute mean of tensor elements."""
+        return self.jnp.mean(tensor, axis=dim, keepdims=keepdim)
+
+    def squeeze(self, tensor, dim=None):
+        """Remove dimensions of size 1."""
+        if dim is None:
+            return self.jnp.squeeze(tensor)
+        return self.jnp.squeeze(tensor, axis=dim)
