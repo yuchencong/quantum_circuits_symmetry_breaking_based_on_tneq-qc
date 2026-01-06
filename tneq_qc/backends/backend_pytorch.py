@@ -463,3 +463,55 @@ class BackendPyTorch(ComputeBackend):
         if hasattr(tensor, 'detach'):
             return tensor.detach()
         return tensor
+
+    def lgamma(self, tensor):
+        """Compute log-gamma function element-wise."""
+        return self.torch.lgamma(tensor)
+
+    def exp(self, tensor):
+        """Compute exponential function element-wise."""
+        return self.torch.exp(tensor)
+
+    def sqrt(self, tensor):
+        """Compute square root element-wise."""
+        return self.torch.sqrt(tensor)
+
+    def square(self, tensor):
+        """Compute square element-wise."""
+        return self.torch.square(tensor)
+
+    def permute(self, tensor, dims):
+        """Permute tensor dimensions."""
+        return tensor.permute(dims)
+
+    def einsum(self, equation, *operands):
+        """Perform Einstein summation convention contraction."""
+        return self.torch.einsum(equation, *operands)
+
+    def ones_like(self, tensor):
+        """Create a tensor of ones with same shape and type as input."""
+        return self.torch.ones_like(tensor)
+
+    def linspace(self, start, end, steps, dtype=None):
+        """Create a 1-D tensor of size steps with values linearly spaced in range [start, end]."""
+        if dtype is None:
+            dtype = self.torch.float32
+        return self.torch.linspace(start, end, steps, dtype=dtype, device=self.backend_info.device)
+
+    def cumsum(self, tensor, dim, dtype=None):
+        """Returns the cumulative sum of elements of input in the dimension dim."""
+        return self.torch.cumsum(tensor, dim=dim, dtype=dtype)
+
+    def rand(self, size, dtype=None):
+        """Returns a tensor filled with random numbers from a uniform distribution on the interval [0, 1)."""
+        if dtype is None:
+            dtype = self.torch.float32
+        return self.torch.rand(size, dtype=dtype, device=self.backend_info.device)
+
+    def real(self, tensor):
+        """Returns the real part of the tensor."""
+        return self.torch.real(tensor)
+
+    def gather(self, input, dim, index):
+        """Gathers values along an axis specified by dim."""
+        return self.torch.gather(input, dim, index)

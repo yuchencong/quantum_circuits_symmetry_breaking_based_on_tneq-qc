@@ -810,15 +810,17 @@ def _contract_symmetric_group(
     
     # Execute contraction
     if has_tntensor:
+        # print("  Using TNTensor contraction with scale handling.")
+        # print(f"  einsum eq: {einsum_eq} raw_tensor_list shapes: {[t.shape for t in raw_tensor_list]}")
         # Use raw tensors for contraction
         raw_result = torch.einsum(einsum_eq, *raw_tensor_list)
-        
+    
         # Create result TNTensor
         result_tensor = TNTensor(raw_result, scale=total_scale)
-        # result_tensor.auto_scale()
+        result_tensor.auto_scale()
     else:
         result_tensor = torch.einsum(einsum_eq, *tensor_list)
-    
+
     # print(f"  Result shape: {result_tensor.shape}")
     
     # Build remaining edges

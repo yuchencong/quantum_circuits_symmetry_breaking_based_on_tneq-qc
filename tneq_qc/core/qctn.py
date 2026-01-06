@@ -67,7 +67,7 @@ class QCTNHelper:
                     graph += line + "\n"
                 return graph
 
-            return generate_std_graph(3)
+            return generate_std_graph(2)
         
             # return  "-3-A-3-"
             # return  "-3-A-3-B-3-C-3-D-3-"
@@ -574,7 +574,7 @@ class QCTN:
             array = tensor_dict[key]
             tensor = self.backend.convert_to_tensor(array)
             tn_tensor = TNTensor(tensor)
-            # tn_tensor.auto_scale()
+            tn_tensor.auto_scale()
             self.cores_weights[core_name] = tn_tensor
 
         metadata_dict = {str(k): str(v) for k, v in metadata.items()}
