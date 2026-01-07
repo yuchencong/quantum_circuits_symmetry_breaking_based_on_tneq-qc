@@ -22,7 +22,11 @@ Example:
 
 # New distributed training modules
 from .comm import MPIBackend, ReduceOp, DistributedContext, MockMPIBackend
-from .parallel import DataParallelTrainer, TrainingConfig
+from .parallel import (
+    DataParallelTrainer, TrainingConfig, TrainingStats,
+    ModelParallelManager, ModelParallelTrainer, ModelParallelConfig,
+    CorePartition, create_model_parallel_trainer
+)
 from .engine import DistributedEngineSiamese
 from .trainer import DistributedTrainer
 
@@ -36,9 +40,17 @@ __all__ = [
     'ReduceOp',
     'DistributedContext',
     
-    # Parallel strategies
+    # Data Parallel
     'DataParallelTrainer',
     'TrainingConfig',
+    'TrainingStats',
+    
+    # Model Parallel
+    'ModelParallelManager',
+    'ModelParallelTrainer',
+    'ModelParallelConfig',
+    'CorePartition',
+    'create_model_parallel_trainer',
     
     # Engine
     'DistributedEngineSiamese',

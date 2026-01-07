@@ -30,7 +30,7 @@ class QCTNHelper:
             yield symbol
 
     @staticmethod
-    def generate_example_graph(target=False):
+    def generate_example_graph(n=16, target=False):
         """Generate an example quantum circuit graph."""
         if target:
             return  "-2-A-5-----C-3-----E-2-\n" \
@@ -66,8 +66,8 @@ class QCTNHelper:
                     
                     graph += line + "\n"
                 return graph
-
-            return generate_std_graph(2)
+            
+            return generate_std_graph(n)
         
             # return  "-3-A-3-"
             # return  "-3-A-3-B-3-C-3-D-3-"
