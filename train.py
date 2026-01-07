@@ -223,3 +223,5 @@ if __name__ == "__main__":
     # get cross entropy loss for all pretrained results (shape = 512)
     loss = - torch.log(pretrained_result)
     print(f"Cross Entropy Loss: {loss} {torch.mean(loss)}")
+
+
