@@ -11,7 +11,12 @@ import time
 from typing import List, Dict, Tuple, Optional, Union, TYPE_CHECKING
 from dataclasses import dataclass, field
 
-from ..comm.mpi_backend import MPIBackend, MockMPIBackend, ReduceOp, get_backend
+from ..comm import CommMPI, MockCommMPI, ReduceOp, get_comm_mpi
+
+# Backward compatibility aliases
+MPIBackend = CommMPI
+MockMPIBackend = MockCommMPI
+get_backend = get_comm_mpi
 
 if TYPE_CHECKING:
     import torch

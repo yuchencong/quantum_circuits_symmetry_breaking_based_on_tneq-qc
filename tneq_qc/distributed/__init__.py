@@ -4,9 +4,9 @@ TNEQ Distributed Computing Module
 Provides distributed training capabilities for TNEQ-QC tensor network models.
 
 Key Components:
-- comm: MPI communication backend
+- comm: Communication backends (MPI, torch.distributed)
 - parallel: Data parallel training strategy
-- engine: Distributed engine
+- engine: Distributed engine with graph partitioning
 - trainer: High-level distributed trainer
 
 Existing (Genetic Algorithm):
@@ -15,30 +15,86 @@ Existing (Genetic Algorithm):
 - mpi_core: Core MPI utilities
 
 Example:
-    >>> from tneq_qc.distributed import DistributedTrainer
-    >>> trainer = DistributedTrainer({'backend_type': 'pytorch'})
+    >>> from tneq_qc.distributed import DistributedTrainer, DistributedConfig
+    >>> config = DistributedConfig(backend_type='pytorch', num_qubits=4)
+    >>> trainer = DistributedTrainer(config)
     >>> stats = trainer.train(data_list, circuit_states_list)
 """
 
-# New distributed training modules
-from .comm import MPIBackend, ReduceOp, DistributedContext, MockMPIBackend
-from .parallel import (
-    DataParallelTrainer, TrainingConfig, TrainingStats,
-    ModelParallelManager, ModelParallelTrainer, ModelParallelConfig,
-    CorePartition, create_model_parallel_trainer
+# Communication backends
+from .comm import (
+    # Interface
+    CommBase,
+    ReduceOp,
+    DistributedContext,
+    AsyncHandle,
+    # MPI backend
+    CommMPI,
+    MockCommMPI,
+    get_comm_mpi,
+    # Torch backend
+    CommTorch,
+    MockCommTorch,
+    get_comm_torch,
+    # Factory
+    get_comm_backend,
+    get_auto_backend,
+    # Backward compatibility
+    MPIBackend,
+    MockMPIBackend,
 )
+
+# Data parallel training
+from .parallel import (
+    DataParallelTrainer, 
+    TrainingConfig, 
+    TrainingStats,
+    ModelParallelManager, 
+    ModelParallelTrainer, 
+    ModelParallelConfig,
+    CorePartition, 
+    create_model_parallel_trainer
+)
+
+# Distributed engine
 from .engine import DistributedEngineSiamese
+from .engine.distributed_engine import (
+    PartitionConfig,
+    ContractStage,
+    DistributedContractPlan,
+)
+
+# High-level trainer
 from .trainer import DistributedTrainer
+from .trainer.distributed_trainer import DistributedConfig
 
 # Legacy genetic algorithm modules (existing)
 from .mpi_core import TAGS, SURVIVAL, REASONS, AGENT_STATUS, INDIVIDUAL_STATUS
 
 __all__ = [
-    # Communication
-    'MPIBackend',
-    'MockMPIBackend',
+    # Communication interface
+    'CommBase',
     'ReduceOp',
     'DistributedContext',
+    'AsyncHandle',
+    
+    # MPI backend
+    'CommMPI',
+    'MockCommMPI',
+    'get_comm_mpi',
+    
+    # Torch backend
+    'CommTorch',
+    'MockCommTorch',
+    'get_comm_torch',
+    
+    # Factory
+    'get_comm_backend',
+    'get_auto_backend',
+    
+    # Backward compatibility (comm)
+    'MPIBackend',
+    'MockMPIBackend',
     
     # Data Parallel
     'DataParallelTrainer',
@@ -54,9 +110,13 @@ __all__ = [
     
     # Engine
     'DistributedEngineSiamese',
+    'PartitionConfig',
+    'ContractStage',
+    'DistributedContractPlan',
     
     # High-level trainer
     'DistributedTrainer',
+    'DistributedConfig',
     
     # Legacy (genetic algorithm)
     'TAGS',

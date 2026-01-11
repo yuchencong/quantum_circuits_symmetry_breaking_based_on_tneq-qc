@@ -28,7 +28,12 @@ from typing import List, Dict, Tuple, Optional, Any, TYPE_CHECKING
 from dataclasses import dataclass
 from copy import deepcopy
 
-from ..comm.mpi_backend import MPIBackend, MockMPIBackend, ReduceOp, get_backend, DistributedContext
+from ..comm import CommMPI, MockCommMPI, ReduceOp, get_comm_mpi, DistributedContext
+
+# Backward compatibility aliases
+MPIBackend = CommMPI
+MockMPIBackend = MockCommMPI
+get_backend = get_comm_mpi
 
 if TYPE_CHECKING:
     from ...core.qctn import QCTN
@@ -225,10 +230,15 @@ class ModelParallelManager:
                     scale_tensor = self.qctn.backend.convert_to_tensor(scale_arr)
                     synced_scale = self.mpi.broadcast(scale_tensor, src=owner)
                     synced_scale = float(self.qctn.backend.tensor_to_numpy(synced_scale)[0])
-                self.qctn.cores_weights[core_name] = TNTensor(synced_tensor, synced_scale)
+                
+                # IMPORTANT: Only overwrite if we are NOT the owner.
+                # If we are owner, we must keep the original tensor to preserve Autograd graph.
+                if self.ctx.rank != owner:
+                    self.qctn.cores_weights[core_name] = TNTensor(synced_tensor, synced_scale)
             else:
                 synced_weight = self.mpi.broadcast(weight, src=owner)
-                self.qctn.cores_weights[core_name] = synced_weight
+                if self.ctx.rank != owner:
+                    self.qctn.cores_weights[core_name] = synced_weight
         
         self._log("All weights synchronized via broadcast")
     
@@ -384,8 +394,23 @@ class ModelParallelTrainer:
         self.manager = ModelParallelManager(qctn, self.mpi, self.config)
         self.partition = self.manager.partition
         
+        # Initialize Distributed Hierarchical Contractor
+        from .distributed_contractor import DistributedHierarchicalContractor
+        self.contractor = DistributedHierarchicalContractor(engine, self.mpi, self.partition)
+
         # Synchronize initial weights
         self.manager.broadcast_all_weights()
+        
+        # Ensure local weights require gradients
+        for core_name in self.partition.local_core_names:
+             w = qctn.cores_weights[core_name]
+             from ...core.tn_tensor import TNTensor
+             if isinstance(w, TNTensor):
+                 if not w.tensor.requires_grad:
+                     w.tensor.requires_grad_(True)
+             else:
+                 if not w.requires_grad:
+                     w.requires_grad_(True)
         
         self._log(f"ModelParallelTrainer initialized")
         self._log(f"  Local cores: {self.partition.local_core_names}")
@@ -429,42 +454,22 @@ class ModelParallelTrainer:
     
     def forward_with_gradient(self, circuit_states_list: List, measure_input_list: List):
         """
-        Forward pass with gradient computation.
+        Forward pass with gradient computation recursively.
         
-        Returns gradients only for local cores.
-        
-        Args:
-            circuit_states_list: Circuit states
-            measure_input_list: Measurement matrices
-            
         Returns:
             (loss, local_gradients) where local_gradients only contains
             gradients for cores owned by this worker
         """
-        if hasattr(self.engine, '_base_engine'):
-            base_engine = self.engine._base_engine
-        else:
-            base_engine = self.engine
+        # Ensure weights are synced (currently full broadcast, can be optimized)
+        self.manager.broadcast_all_weights()
         
-        # Compute full gradients
-        # Note: returns (loss, grads_list) where grads_list is a list in core order
-        loss, grads_list = base_engine.contract_with_compiled_strategy_for_gradient(
+        # Delegate to distributed contractor
+        return self.contractor.forward_with_gradient(
             self.qctn,
-            circuit_states_list=circuit_states_list,
-            measure_input_list=measure_input_list
+            circuit_states_list,
+            measure_input_list
         )
-        
-        # Convert grads list to dict using core names from qctn.cores (which is a list)
-        core_names = self.qctn.cores  # already a list of core names
-        full_grads = {core_names[i]: grads_list[i] for i in range(len(grads_list))}
-        
-        # Filter to local gradients only
-        local_grads = {}
-        for core_name, grad in full_grads.items():
-            if self.partition.is_local_core(core_name):
-                local_grads[core_name] = grad
-        
-        return loss, local_grads
+
     
     def train_step(self, 
                    circuit_states_list: List, 
