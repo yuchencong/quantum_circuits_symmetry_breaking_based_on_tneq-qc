@@ -1029,39 +1029,39 @@ class DistributedEngineSiamese:
         my_partition = self.rank  # Assuming 1:1 mapping between rank and partition
         all_cross_edges = self._contract_plan.inter_node_graph.get('cross_edges', [])
         
-        if self.rank == 0:
-            print(f"\n[Rank {self.rank}] === Cross Edges for Partition {my_partition} (Stage {stage_idx}) ===")
-            print(f"  Input tensor shape: {local_tensor.shape}")
-            print(f"  Contract qubit indices for this stage: {contract_qubit_indices}")
+        # if self.rank == 0:
+        #     print(f"\n[Rank {self.rank}] === Cross Edges for Partition {my_partition} (Stage {stage_idx}) ===")
+        #     print(f"  Input tensor shape: {local_tensor.shape}")
+        #     print(f"  Contract qubit indices for this stage: {contract_qubit_indices}")
             
-            # Find edges where this partition is the source (OUT edges)
-            out_edges = [e for e in all_cross_edges if e['from_partition'] == my_partition]
-            print(f"  OUT edges (from this partition):")
-            if out_edges:
-                for edge in out_edges:
-                    is_contract = edge['qubit_idx'] in contract_qubit_indices
-                    marker = " [CONTRACT]" if is_contract else ""
-                    print(f"    -> P{edge['to_partition']}: qubit={edge['qubit_idx']}, "
-                        f"edge_rank={edge['edge_rank']}, "
-                        f"from_core={edge.get('from_partition', 'N/A')}, "
-                        f"to_core={edge.get('to_partition', 'N/A')}{marker}")
-            else:
-                print(f"    (none)")
+        #     # Find edges where this partition is the source (OUT edges)
+        #     out_edges = [e for e in all_cross_edges if e['from_partition'] == my_partition]
+        #     print(f"  OUT edges (from this partition):")
+        #     if out_edges:
+        #         for edge in out_edges:
+        #             is_contract = edge['qubit_idx'] in contract_qubit_indices
+        #             marker = " [CONTRACT]" if is_contract else ""
+        #             print(f"    -> P{edge['to_partition']}: qubit={edge['qubit_idx']}, "
+        #                 f"edge_rank={edge['edge_rank']}, "
+        #                 f"from_core={edge.get('from_partition', 'N/A')}, "
+        #                 f"to_core={edge.get('to_partition', 'N/A')}{marker}")
+        #     else:
+        #         print(f"    (none)")
             
-            # Find edges where this partition is the destination (IN edges)
-            in_edges = [e for e in all_cross_edges if e['to_partition'] == my_partition]
-            print(f"  IN edges (to this partition):")
-            if in_edges:
-                for edge in in_edges:
-                    is_contract = edge['qubit_idx'] in contract_qubit_indices
-                    marker = " [CONTRACT]" if is_contract else ""
-                    print(f"    <- P{edge['from_partition']}: qubit={edge['qubit_idx']}, "
-                        f"edge_rank={edge['edge_rank']}, "
-                        f"from_core={edge.get('from_partition', 'N/A')}, "
-                        f"to_core={edge.get('to_partition', 'N/A')}{marker}")
-            else:
-                print(f"    (none)")
-            print(f"[Rank {self.rank}] =====================================\n")
+        #     # Find edges where this partition is the destination (IN edges)
+        #     in_edges = [e for e in all_cross_edges if e['to_partition'] == my_partition]
+        #     print(f"  IN edges (to this partition):")
+        #     if in_edges:
+        #         for edge in in_edges:
+        #             is_contract = edge['qubit_idx'] in contract_qubit_indices
+        #             marker = " [CONTRACT]" if is_contract else ""
+        #             print(f"    <- P{edge['from_partition']}: qubit={edge['qubit_idx']}, "
+        #                 f"edge_rank={edge['edge_rank']}, "
+        #                 f"from_core={edge.get('from_partition', 'N/A')}, "
+        #                 f"to_core={edge.get('to_partition', 'N/A')}{marker}")
+        #     else:
+        #         print(f"    (none)")
+        #     print(f"[Rank {self.rank}] =====================================\n")
         
         # Get qubit dimension info from local_qctn
         # The tensor dims after batch are ordered based on cross-partition edges
@@ -1071,8 +1071,7 @@ class DistributedEngineSiamese:
         n_dims = len(remaining_dims)
         
         # =====================================================================
-        # Determine contract_dim_indices and non_contract_dim_indices
-        # based on cross_edges from _contract_plan
+        # Define left_partitions, right_partitions based on group structure
         # =====================================================================
         
         # For stage k, group_size = 2^k
@@ -1083,149 +1082,177 @@ class DistributedEngineSiamese:
         my_group_idx = my_partition // group_size
         group_start = my_group_idx * group_size
         
-        # Compute my_partitions (partitions in same half as me) and partner_partitions
-        if is_left_half:
-            my_partitions = set(range(group_start, group_start + half_group_size))
-            partner_partitions = set(range(group_start + half_group_size, group_start + group_size))
-        else:
-            my_partitions = set(range(group_start + half_group_size, group_start + group_size))
-            partner_partitions = set(range(group_start, group_start + half_group_size))
+        # Define left and right partitions for this group
+        left_partitions = set(range(group_start, group_start + half_group_size))
+        right_partitions = set(range(group_start + half_group_size, group_start + group_size))
         
-        print(f"[Rank {self.rank}] Stage {stage_idx}: my_partitions={sorted(my_partitions)}, "
-              f"partner_partitions={sorted(partner_partitions)}")
+        print(f"[Rank {self.rank}] Stage {stage_idx}: left_partitions={sorted(left_partitions)}, "
+              f"right_partitions={sorted(right_partitions)}, is_left_half={is_left_half}")
         
         # Get all cross edges from contract plan
         all_cross_edges = self._contract_plan.inter_node_graph.get('cross_edges', [])
         
-        # Find edges relevant to current partition
-        # OUT edges: from this partition to others
-        # IN edges: from others to this partition
-        my_out_edges = [e for e in all_cross_edges if e['from_partition'] in my_partitions]
-        my_in_edges = [e for e in all_cross_edges if e['to_partition'] in my_partitions]
+        # =====================================================================
+        # Compute in_edges, out_edges, permute, contract_dim for BOTH partitions
+        # Each partition needs: in_edges, out_edges sorted by qubit
+        # Then compute contract_dim, non_contract_dim indices
+        # Track dim_info: for each dim after permute, record:
+        #   - is_contract: bool
+        #   - edge_type: 'in' or 'out'
+        #   - edge_idx: index in that edge list
+        # =====================================================================
         
-        # # Build list of external edges in dimension order
-        # # After local contraction, remaining dims correspond to:
-        # #   - IN edges that are cross-partition (in order of qubit_idx)
-        # #   - OUT edges that are cross-partition (in order of qubit_idx)
-        # # Also include INPUT/OUTPUT edges (no neighbor)
-        
-        # # Get partition adjacency table for this partition
-        # partition_tables = self._contract_plan.inter_node_graph.get('partition_adjacency_tables', [])
-        # my_adj_table = partition_tables[my_partition] if my_partition < len(partition_tables) else []
-        
-
-        # print(f"[Rank {self.rank}] my_in_edges {my_in_edges} my_out_edges {my_out_edges}")
-        
-        # # Debug: print partition adjacency table
-        # print(f"[Rank {self.rank}] my_adj_table has {len(my_adj_table)} entries:")
-        # for entry in my_adj_table:
-        #     core_name = entry.get('core_name', 'unknown')
-        #     in_edges = entry.get('in_edge_list', [])
-        #     out_edges = entry.get('out_edge_list', [])
-        #     print(f"  Core '{core_name}':")
-        #     for e in in_edges:
-        #         print(f"    IN: neighbor={e.get('neighbor_name')}, qubit={e.get('qubit_idx')}, "
-        #               f"is_cross={e.get('is_cross_partition')}, neighbor_part={e.get('neighbor_partition', 'N/A')}")
-        #     for e in out_edges:
-        #         print(f"    OUT: neighbor={e.get('neighbor_name')}, qubit={e.get('qubit_idx')}, "
-        #               f"is_cross={e.get('is_cross_partition')}, neighbor_part={e.get('neighbor_partition', 'N/A')}")
-        
-        # # Collect all external edges (ordered by qubit_idx for consistency)
-        # # An "external edge" is either:
-        # #   1. Cross-partition edge (neighbor in different partition)
-        # #   2. INPUT/OUTPUT edge (no neighbor)
-        # external_edges = []
-        
-        # for entry in my_adj_table:
-        #     # Process IN edges
-        #     for e in entry.get('in_edge_list', []):
-        #         # print(f"[Rank {self.rank}] Found external IN edge: qubit={e.get('qubit_idx')}, "
-        #         #         f"neighbor={e.get('neighbor_name')}, is_cross={e.get('is_cross_partition')}, "
-        #         #         f"neighbor_part={e.get('neighbor_partition', 'N/A')}")
-        #         # if e.get('is_cross_partition', False) or not e.get('neighbor_name'):
-        #         if e.get('is_cross_partition', False):
-        #             external_edges.append({
-        #                 'type': 'in',
-        #                 'qubit_idx': e.get('qubit_idx', -1),
-        #                 'edge_rank': e.get('edge_rank', 0),
-        #                 'neighbor_partition': e.get('neighbor_partition', -1),
-        #                 'is_cross_partition': e.get('is_cross_partition', False),
-        #             })
-        #     # Process OUT edges
-        #     for e in entry.get('out_edge_list', []):
-        #         # print(f"[Rank {self.rank}] Found external OUT edge: qubit={e.get('qubit_idx')}, "
-        #         #         f"neighbor={e.get('neighbor_name')}, is_cross={e.get('is_cross_partition')}, "
-        #         #         f"neighbor_part={e.get('neighbor_partition', 'N/A')}")
-        #         # if e.get('is_cross_partition', False) or not e.get('neighbor_name'):
-        #         if e.get('is_cross_partition', False):
-        #             external_edges.append({
-        #                 'type': 'out',
-        #                 'qubit_idx': e.get('qubit_idx', -1),
-        #                 'edge_rank': e.get('edge_rank', 0),
-        #                 'neighbor_partition': e.get('neighbor_partition', -1),
-        #                 'is_cross_partition': e.get('is_cross_partition', False),
-        #             })
-        
-        # # Sort by qubit_idx to match tensor dimension order
-        # external_edges.sort(key=lambda x: (x['qubit_idx'], 0 if x['type'] == 'in' else 1))
-        
-        # print(f"[Rank {self.rank}] External edges ({len(external_edges)} total, {n_dims} tensor dims):")
-        # for i, e in enumerate(external_edges):
-        #     print(f"  dim[{i}]: {e['type'].upper()} qubit={e['qubit_idx']}, "
-        #           f"rank={e['edge_rank']}, neighbor_part={e['neighbor_partition']}, "
-        #           f"is_cross={e['is_cross_partition']}")
-        
-        # Now determine contract_dim_indices and non_contract_dim_indices
-        # Contract dims: edges connecting my_partitions to partner_partitions
-        contract_dim_indices = []
-        non_contract_dim_indices = []
-        
-        # for dim_idx, edge in enumerate(external_edges):
-        #     if dim_idx >= n_dims:
-        #         break  # Safety check
+        def compute_partition_info(partitions, partner_partitions, n_dims):
+            """
+            Compute in_edges, out_edges, permute, contract_dim info for a set of partitions.
             
-        #     neighbor_part = edge.get('neighbor_partition', -1)
-        #     is_cross = edge.get('is_cross_partition', False)
+            Returns:
+                dict with keys:
+                - in_edges: sorted by qubit_idx
+                - out_edges: sorted by qubit_idx
+                - contract_dim_indices: list of dim indices (in original tensor)
+                - non_contract_dim_indices: list of dim indices (in original tensor)
+                - perm: permutation to apply [batch, non_contract..., contract...]
+                - dim_info: list of dicts, one per dim after permute (excluding batch)
+                    Each dict: {'is_contract': bool, 'edge_type': 'in'|'out', 'edge_idx': int}
+            """
+            # Find edges relevant to these partitions
+            # OUT edges: from these partitions to any other
+            # IN edges: from any other to these partitions
+            out_edges = [e for e in all_cross_edges if e['from_partition'] in partitions and e['to_partition'] not in partitions]
+            in_edges = [e for e in all_cross_edges if e['to_partition'] in partitions and e['from_partition'] not in partitions]
             
-        #     # An edge is a contract edge if:
-        #     # - It's a cross-partition edge AND
-        #     # - The neighbor partition is in partner_partitions
-        #     if is_cross and neighbor_part in partner_partitions:
-        #         contract_dim_indices.append(dim_idx)
-        #     else:
-        #         non_contract_dim_indices.append(dim_idx)
-        
-        # sort my_in_edges and my_out_edge with qubit_idx to match tensor dim order
-        my_in_edges.sort(key=lambda x: x['qubit_idx'])
-        my_out_edges.sort(key=lambda x: x['qubit_idx'])
+            # Sort by qubit_idx to match tensor dim order
+            in_edges.sort(key=lambda x: x['qubit_idx'])
+            out_edges.sort(key=lambda x: x['qubit_idx'])
 
-        # print(f"[Rank {self.rank}] Sorted my_in_edges by qubit_idx:")
-        # for i, e in enumerate(my_in_edges):
-        #     print(f"[Rank {self.rank}]  dim[{i}]: IN qubit={e['qubit_idx']}, to_part={e['to_partition']}, from_part={e['from_partition']}")
-        # print(f"[Rank {self.rank}] Sorted my_out_edges by qubit_idx:")
-        # for i, e in enumerate(my_out_edges):
-        #     print(f"[Rank {self.rank}]  dim[{i}]: OUT qubit={e['qubit_idx']}, to_part={e['to_partition']}, from_part={e['from_partition']}")
-
-        for dim_idx, in_edge in enumerate(my_in_edges):
-            neighbor_part = in_edge.get('from_partition', -1)
-            if neighbor_part in partner_partitions:
-                contract_dim_indices.append(dim_idx)
-                contract_dim_indices.append(n_dims - dim_idx - 1)
-            else:
-                non_contract_dim_indices.append(dim_idx)
-                non_contract_dim_indices.append(n_dims - dim_idx - 1)
-        offset = len(my_in_edges)
-        for dim_idx, out_edge in enumerate(my_out_edges):
-            neighbor_part = out_edge.get('to_partition', -1)
-            if neighbor_part in partner_partitions:
-                contract_dim_indices.append(offset + dim_idx)
-                contract_dim_indices.append(n_dims - (offset + dim_idx) - 1)
-            else:
-                non_contract_dim_indices.append(offset + dim_idx)
-                non_contract_dim_indices.append(n_dims - (offset + dim_idx) - 1)
+            print(f"[Rank {self.rank}] in_edges {in_edges}, out_edges {out_edges}")
+            
+            contract_dim_indices = []
+            non_contract_dim_indices = []
+            
+            # For in_edges: dim_idx is position in sorted in_edges list
+            for dim_idx, in_edge in enumerate(in_edges):
+                neighbor_part = in_edge.get('from_partition', -1)
+                if neighbor_part in partner_partitions:
+                    # Contract dim: add both original and its mirror
+                    contract_dim_indices.append(dim_idx)
+                    contract_dim_indices.append(n_dims - dim_idx - 1)
+                else:
+                    non_contract_dim_indices.append(dim_idx)
+                    non_contract_dim_indices.append(n_dims - dim_idx - 1)
+            
+            # For out_edges: offset by number of in_edges
+            offset = len(in_edges)
+            for dim_idx, out_edge in enumerate(out_edges):
+                neighbor_part = out_edge.get('to_partition', -1)
+                if neighbor_part in partner_partitions:
+                    contract_dim_indices.append(offset + dim_idx)
+                    contract_dim_indices.append(n_dims - (offset + dim_idx) - 1)
+                else:
+                    non_contract_dim_indices.append(offset + dim_idx)
+                    non_contract_dim_indices.append(n_dims - (offset + dim_idx) - 1)
+            
+            # Build permutation: [batch, non_contract_dims..., contract_dims...]
+            perm = [0] + [d + 1 for d in non_contract_dim_indices] + [d + 1 for d in contract_dim_indices]
+            
+            # Build dim_info for each dim after permute (excluding batch dim)
+            # Order: non_contract_dims first, then contract_dims
+            dim_info = []
+            
+            # Non-contract dims first
+            for orig_dim_idx in non_contract_dim_indices:
+                # Determine if this is an in_edge or out_edge dim
+                if orig_dim_idx < len(in_edges):
+                    edge_type = 'in'
+                    edge_idx = orig_dim_idx
+                elif orig_dim_idx >= n_dims - len(in_edges):
+                    # Mirror of in_edge
+                    edge_type = 'in'
+                    edge_idx = n_dims - orig_dim_idx - 1
+                elif orig_dim_idx < offset + len(out_edges):
+                    edge_type = 'out'
+                    edge_idx = orig_dim_idx - offset
+                else:
+                    # Mirror of out_edge
+                    edge_type = 'out'
+                    edge_idx = n_dims - orig_dim_idx - 1 - offset
+                
+                dim_info.append({
+                    'is_contract': False,
+                    'edge_type': edge_type,
+                    'edge_idx': edge_idx,
+                    'orig_dim_idx': orig_dim_idx
+                })
+            
+            # Contract dims next
+            for orig_dim_idx in contract_dim_indices:
+                if orig_dim_idx < len(in_edges):
+                    edge_type = 'in'
+                    edge_idx = orig_dim_idx
+                elif orig_dim_idx >= n_dims - len(in_edges):
+                    edge_type = 'in'
+                    edge_idx = n_dims - orig_dim_idx - 1
+                elif orig_dim_idx < offset + len(out_edges):
+                    edge_type = 'out'
+                    edge_idx = orig_dim_idx - offset
+                else:
+                    edge_type = 'out'
+                    edge_idx = n_dims - orig_dim_idx - 1 - offset
+                
+                dim_info.append({
+                    'is_contract': True,
+                    'edge_type': edge_type,
+                    'edge_idx': edge_idx,
+                    'orig_dim_idx': orig_dim_idx
+                })
+            
+            return {
+                'in_edges': in_edges,
+                'out_edges': out_edges,
+                'contract_dim_indices': contract_dim_indices,
+                'non_contract_dim_indices': non_contract_dim_indices,
+                'perm': perm,
+                'dim_info': dim_info
+            }
         
+        # Compute info for both left and right partitions
+        left_info = compute_partition_info(left_partitions, right_partitions, n_dims)
+        right_info = compute_partition_info(right_partitions, left_partitions, n_dims)
+        
+        # if stage_idx == 2:
+        #     if self.rank == 0:
+        #         print(f"[Rank {self.rank}] Left partition info:")
+        #         print(f"  in_edges: {len(left_info['in_edges'])}, out_edges: {len(left_info['out_edges'])}")
+        #         print(f"  contract_dims: {left_info['contract_dim_indices']}")
+        #         print(f"  non_contract_dims: {left_info['non_contract_dim_indices']}")
+        #         print(f"  perm: {left_info['perm']}")
+                
+        #         print(f"[Rank {self.rank}] Right partition info:")
+        #         print(f"  in_edges: {len(right_info['in_edges'])}, out_edges: {len(right_info['out_edges'])}")
+        #         print(f"  contract_dims: {right_info['contract_dim_indices']}")
+        #         print(f"  non_contract_dims: {right_info['non_contract_dim_indices']}")
+        #         print(f"  perm: {right_info['perm']}")
+        #     exit()
+        
+        # Select my partition's info based on is_left_half
+        if is_left_half:
+            my_info = left_info
+            partner_info = right_info
+        else:
+            my_info = right_info
+            partner_info = left_info
+        
+        contract_dim_indices = my_info['contract_dim_indices']
+        non_contract_dim_indices = my_info['non_contract_dim_indices']
+        perm = my_info['perm']
+        dim_info = my_info['dim_info']
+        
+        print(f"[Rank {self.rank}] Using {'left' if is_left_half else 'right'} partition info")
         print(f"[Rank {self.rank}] Contract dim indices: {contract_dim_indices}")
         print(f"[Rank {self.rank}] Non-contract dim indices: {non_contract_dim_indices}")
+        print(f"[Rank {self.rank}] Permutation: {perm}")
+        print(f"[Rank {self.rank}] Dim info after permute: {dim_info}")
         
         # If no contract dims identified, fallback
         if not contract_dim_indices:
@@ -1233,7 +1260,7 @@ class DistributedEngineSiamese:
             return local_tensor
 
         # Transpose: [batch, non_contract_dims..., contract_dims...]
-        perm = [0] + [d + 1 for d in non_contract_dim_indices] + [d + 1 for d in contract_dim_indices]
+        # Use the perm already computed from partition info
         transposed = local_tensor.permute(perm)
         
         # Compute shapes
@@ -1365,12 +1392,164 @@ class DistributedEngineSiamese:
         
         print(f"[Rank {self.rank}] Full result after allreduce: {full_result.shape}")
         
-        # Reshape back to multi-dimensional tensor
-        # New shape: [batch, non_contract_dims..., M]
-        new_shape = [batch_size] + non_contract_shape + [M_right]
-        result = full_result.reshape(new_shape)
+        # =====================================================================
+        # Reshape back to multi-dimensional tensor where each dim = one edge
+        # Result shape: [batch, left_non_contract_dims..., right_non_contract_dims...]
+        # Each dim corresponds to one edge from left_info or right_info's non_contract dims
+        # =====================================================================
         
-        print(f"[Rank {self.rank}] Final result shape: {result.shape}")
+        # Get non_contract_dim shapes from left_info and right_info
+        # left_info['non_contract_dim_indices'] tells us which original dims are non-contract for left
+        # right_info['non_contract_dim_indices'] tells us which original dims are non-contract for right
+        
+        left_non_contract_indices = left_info['non_contract_dim_indices']
+        right_non_contract_indices = right_info['non_contract_dim_indices']
+        
+        # Get the shapes for each non-contract dim
+        # remaining_dims contains the original tensor dim sizes (excluding batch)
+        left_non_contract_shapes = [remaining_dims[d] for d in left_non_contract_indices]
+        right_non_contract_shapes = [remaining_dims[d] for d in right_non_contract_indices]
+        
+        # Build the final shape: [batch, left_non_contract_shapes..., right_non_contract_shapes...]
+        # This gives us one dim per edge
+        result_shape = [batch_size] + left_non_contract_shapes + right_non_contract_shapes
+        result = full_result.reshape(result_shape)
+        
+        print(f"[Rank {self.rank}] Reshaped result to per-edge dims:")
+        print(f"  left_non_contract_indices: {left_non_contract_indices}")
+        print(f"  left_non_contract_shapes: {left_non_contract_shapes}")
+        print(f"  right_non_contract_indices: {right_non_contract_indices}")
+        print(f"  right_non_contract_shapes: {right_non_contract_shapes}")
+        print(f"  Intermediate result shape: {result.shape}")
+        
+        # =====================================================================
+        # Reorder dims to match symmetric core tensor structure:
+        # [B, in_edges sorted by qubit, out_edges sorted by qubit, 
+        #     out_edges reversed, in_edges reversed]
+        # 
+        # Note: result already has mirrored structure within each partition:
+        # - left_non_contract has pairs (original, mirror) for each edge
+        # - right_non_contract has pairs (original, mirror) for each edge
+        # 
+        # Example: left has out_q1, right has in_q2
+        # Current result: [B, left_out_q1, left_out_q1, right_in_q2, right_in_q2]
+        # After reorder:  [B, right_in_q2, left_out_q1, left_out_q1, right_in_q2]
+        # =====================================================================
+        
+        # Collect unique edges (only the first of each pair) from both left and right
+        # Each partition's non_contract_indices is already paired: [orig, mirror, orig, mirror, ...]
+        # We take only the first half as unique edges, and record both positions
+        
+        def extract_unique_edges_with_positions(non_contract_indices, partition_info, source, result_dim_offset):
+            """
+            Extract unique edges from non_contract_indices (which has mirrored pairs).
+            Returns list of edge info with both primary and mirror positions in result.
+            """
+            unique_edges = []
+            n_in = len(partition_info['in_edges'])
+            offset = n_in
+            
+            # non_contract_indices has pairs: [idx0, mirror0, idx1, mirror1, ...]
+            # Each pair corresponds to one unique edge
+            n_pairs = len(non_contract_indices) // 2
+            
+            for pair_idx in range(n_pairs):
+                primary_orig_dim = non_contract_indices[pair_idx * 2]
+                mirror_orig_dim = non_contract_indices[pair_idx * 2 + 1]
+                
+                # Determine edge type and qubit_idx from primary dim
+                if primary_orig_dim < n_in:
+                    edge_type = 'in'
+                    edge_idx = primary_orig_dim
+                    qubit_idx = partition_info['in_edges'][edge_idx]['qubit_idx']
+                elif primary_orig_dim >= n_dims - n_in:
+                    edge_type = 'in'
+                    edge_idx = n_dims - primary_orig_dim - 1
+                    qubit_idx = partition_info['in_edges'][edge_idx]['qubit_idx']
+                elif primary_orig_dim < offset + len(partition_info['out_edges']):
+                    edge_type = 'out'
+                    edge_idx = primary_orig_dim - offset
+                    qubit_idx = partition_info['out_edges'][edge_idx]['qubit_idx']
+                else:
+                    edge_type = 'out'
+                    edge_idx = n_dims - primary_orig_dim - 1 - offset
+                    qubit_idx = partition_info['out_edges'][edge_idx]['qubit_idx']
+                
+                unique_edges.append({
+                    'edge_type': edge_type,
+                    'qubit_idx': qubit_idx,
+                    'source': source,
+                    'primary_dim_in_result': result_dim_offset + pair_idx * 2 + 1,  # +1 for batch
+                    'mirror_dim_in_result': result_dim_offset + pair_idx * 2 + 2,   # +1 for batch
+                    'shape': remaining_dims[primary_orig_dim]
+                })
+            
+            return unique_edges
+        
+        # Extract unique edges from left and right partitions
+        left_unique_edges = extract_unique_edges_with_positions(
+            left_non_contract_indices, left_info, 'left', 0)
+        right_unique_edges = extract_unique_edges_with_positions(
+            right_non_contract_indices, right_info, 'right', len(left_non_contract_indices))
+        
+        all_unique_edges = left_unique_edges + right_unique_edges
+        
+        print(f"[Rank {self.rank}] Left unique edges: {left_unique_edges}")
+        print(f"[Rank {self.rank}] Right unique edges: {right_unique_edges}")
+        
+        # Sort unique edges: first in_edges by qubit, then out_edges by qubit
+        in_edges_sorted = sorted([e for e in all_unique_edges if e['edge_type'] == 'in'], 
+                                  key=lambda x: x['qubit_idx'])
+        out_edges_sorted = sorted([e for e in all_unique_edges if e['edge_type'] == 'out'], 
+                                   key=lambda x: x['qubit_idx'])
+        
+        # Build first half: [in_edges sorted, out_edges sorted] using primary positions
+        # Build second half: [out_edges reversed, in_edges reversed] using mirror positions
+        first_half_edges = in_edges_sorted + out_edges_sorted
+        second_half_edges = list(reversed(out_edges_sorted)) + list(reversed(in_edges_sorted))
+        
+        # Construct permutation
+        perm_after_reshape = [0]  # batch dim stays at 0
+        
+        # First half uses primary positions
+        for edge in first_half_edges:
+            perm_after_reshape.append(edge['primary_dim_in_result'])
+        
+        # Second half uses mirror positions
+        for edge in second_half_edges:
+            perm_after_reshape.append(edge['mirror_dim_in_result'])
+        
+        print(f"[Rank {self.rank}] Reorder permutation: {perm_after_reshape}")
+        print(f"[Rank {self.rank}] First half (in sorted, out sorted): "
+              f"{[(e['edge_type'], e['qubit_idx'], e['source']) for e in first_half_edges]}")
+        print(f"[Rank {self.rank}] Second half (out rev, in rev): "
+              f"{[(e['edge_type'], e['qubit_idx'], e['source']) for e in second_half_edges]}")
+        
+        # Apply permutation to reorder dims
+        result = result.permute(perm_after_reshape)
+        
+        # Build final dim_info in the new order
+        # First half uses primary dims, second half uses mirror dims
+        result_dim_info = []
+        for edge in first_half_edges:
+            result_dim_info.append({
+                'source': edge['source'],
+                'edge_type': edge['edge_type'],
+                'qubit_idx': edge['qubit_idx'],
+                'shape': edge['shape'],
+                'is_mirror': False
+            })
+        for edge in second_half_edges:
+            result_dim_info.append({
+                'source': edge['source'],
+                'edge_type': edge['edge_type'],
+                'qubit_idx': edge['qubit_idx'],
+                'shape': edge['shape'],
+                'is_mirror': True
+            })
+        
+        print(f"[Rank {self.rank}] Final result shape after reorder: {result.shape}")
+        print(f"[Rank {self.rank}] Result dim info (symmetric): {result_dim_info}")
         
         return result
     
