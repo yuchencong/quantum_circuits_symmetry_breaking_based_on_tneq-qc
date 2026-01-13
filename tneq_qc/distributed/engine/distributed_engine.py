@@ -1025,46 +1025,213 @@ class DistributedEngineSiamese:
         group_size = len(group_ranks)
         half_group_size = group_size // 2
         
-        # Get qubit dimension info from local_qctn
-        # The tensor dims after batch are ordered: [in_qubit_dims..., out_qubit_dims...]
-        qubit_indices = self._local_qctn.qubit_indices
+        # Print cross-edge information for this partition from _contract_plan
+        my_partition = self.rank  # Assuming 1:1 mapping between rank and partition
+        all_cross_edges = self._contract_plan.inter_node_graph.get('cross_edges', [])
         
-        # Determine which tensor dimensions correspond to contract qubits
-        # Assume tensor layout: [batch, qubit_0_in, qubit_0_out, qubit_1_in, qubit_1_out, ...]
-        # For simplicity, we treat the tensor as [batch, ...dims...]
-        # and identify dims by their qubit_idx
+        if self.rank == 0:
+            print(f"\n[Rank {self.rank}] === Cross Edges for Partition {my_partition} (Stage {stage_idx}) ===")
+            print(f"  Input tensor shape: {local_tensor.shape}")
+            print(f"  Contract qubit indices for this stage: {contract_qubit_indices}")
+            
+            # Find edges where this partition is the source (OUT edges)
+            out_edges = [e for e in all_cross_edges if e['from_partition'] == my_partition]
+            print(f"  OUT edges (from this partition):")
+            if out_edges:
+                for edge in out_edges:
+                    is_contract = edge['qubit_idx'] in contract_qubit_indices
+                    marker = " [CONTRACT]" if is_contract else ""
+                    print(f"    -> P{edge['to_partition']}: qubit={edge['qubit_idx']}, "
+                        f"edge_rank={edge['edge_rank']}, "
+                        f"from_core={edge.get('from_partition', 'N/A')}, "
+                        f"to_core={edge.get('to_partition', 'N/A')}{marker}")
+            else:
+                print(f"    (none)")
+            
+            # Find edges where this partition is the destination (IN edges)
+            in_edges = [e for e in all_cross_edges if e['to_partition'] == my_partition]
+            print(f"  IN edges (to this partition):")
+            if in_edges:
+                for edge in in_edges:
+                    is_contract = edge['qubit_idx'] in contract_qubit_indices
+                    marker = " [CONTRACT]" if is_contract else ""
+                    print(f"    <- P{edge['from_partition']}: qubit={edge['qubit_idx']}, "
+                        f"edge_rank={edge['edge_rank']}, "
+                        f"from_core={edge.get('from_partition', 'N/A')}, "
+                        f"to_core={edge.get('to_partition', 'N/A')}{marker}")
+            else:
+                print(f"    (none)")
+            print(f"[Rank {self.rank}] =====================================\n")
+        
+        # Get qubit dimension info from local_qctn
+        # The tensor dims after batch are ordered based on cross-partition edges
         
         batch_size = local_tensor.shape[0]
         remaining_dims = list(local_tensor.shape[1:])
-        
-        # For now, assume symmetric structure: each qubit has in and out dims
-        # Contract dims are at specific positions based on qubit_indices
         n_dims = len(remaining_dims)
         
-        # Build mapping: which dims (after batch) correspond to contract qubits
-        # Simplified: assume dims are ordered by qubit_idx, each qubit has 2 dims (in, out)
+        # =====================================================================
+        # Determine contract_dim_indices and non_contract_dim_indices
+        # based on cross_edges from _contract_plan
+        # =====================================================================
+        
+        # For stage k, group_size = 2^k
+        # My group contains partitions: [group_start, group_start + group_size - 1]
+        # Left half: [group_start, group_start + half_group_size - 1]
+        # Right half: [group_start + half_group_size, group_start + group_size - 1]
+        my_partition = self.rank
+        my_group_idx = my_partition // group_size
+        group_start = my_group_idx * group_size
+        
+        # Compute my_partitions (partitions in same half as me) and partner_partitions
+        if is_left_half:
+            my_partitions = set(range(group_start, group_start + half_group_size))
+            partner_partitions = set(range(group_start + half_group_size, group_start + group_size))
+        else:
+            my_partitions = set(range(group_start + half_group_size, group_start + group_size))
+            partner_partitions = set(range(group_start, group_start + half_group_size))
+        
+        print(f"[Rank {self.rank}] Stage {stage_idx}: my_partitions={sorted(my_partitions)}, "
+              f"partner_partitions={sorted(partner_partitions)}")
+        
+        # Get all cross edges from contract plan
+        all_cross_edges = self._contract_plan.inter_node_graph.get('cross_edges', [])
+        
+        # Find edges relevant to current partition
+        # OUT edges: from this partition to others
+        # IN edges: from others to this partition
+        my_out_edges = [e for e in all_cross_edges if e['from_partition'] in my_partitions]
+        my_in_edges = [e for e in all_cross_edges if e['to_partition'] in my_partitions]
+        
+        # # Build list of external edges in dimension order
+        # # After local contraction, remaining dims correspond to:
+        # #   - IN edges that are cross-partition (in order of qubit_idx)
+        # #   - OUT edges that are cross-partition (in order of qubit_idx)
+        # # Also include INPUT/OUTPUT edges (no neighbor)
+        
+        # # Get partition adjacency table for this partition
+        # partition_tables = self._contract_plan.inter_node_graph.get('partition_adjacency_tables', [])
+        # my_adj_table = partition_tables[my_partition] if my_partition < len(partition_tables) else []
+        
+
+        # print(f"[Rank {self.rank}] my_in_edges {my_in_edges} my_out_edges {my_out_edges}")
+        
+        # # Debug: print partition adjacency table
+        # print(f"[Rank {self.rank}] my_adj_table has {len(my_adj_table)} entries:")
+        # for entry in my_adj_table:
+        #     core_name = entry.get('core_name', 'unknown')
+        #     in_edges = entry.get('in_edge_list', [])
+        #     out_edges = entry.get('out_edge_list', [])
+        #     print(f"  Core '{core_name}':")
+        #     for e in in_edges:
+        #         print(f"    IN: neighbor={e.get('neighbor_name')}, qubit={e.get('qubit_idx')}, "
+        #               f"is_cross={e.get('is_cross_partition')}, neighbor_part={e.get('neighbor_partition', 'N/A')}")
+        #     for e in out_edges:
+        #         print(f"    OUT: neighbor={e.get('neighbor_name')}, qubit={e.get('qubit_idx')}, "
+        #               f"is_cross={e.get('is_cross_partition')}, neighbor_part={e.get('neighbor_partition', 'N/A')}")
+        
+        # # Collect all external edges (ordered by qubit_idx for consistency)
+        # # An "external edge" is either:
+        # #   1. Cross-partition edge (neighbor in different partition)
+        # #   2. INPUT/OUTPUT edge (no neighbor)
+        # external_edges = []
+        
+        # for entry in my_adj_table:
+        #     # Process IN edges
+        #     for e in entry.get('in_edge_list', []):
+        #         # print(f"[Rank {self.rank}] Found external IN edge: qubit={e.get('qubit_idx')}, "
+        #         #         f"neighbor={e.get('neighbor_name')}, is_cross={e.get('is_cross_partition')}, "
+        #         #         f"neighbor_part={e.get('neighbor_partition', 'N/A')}")
+        #         # if e.get('is_cross_partition', False) or not e.get('neighbor_name'):
+        #         if e.get('is_cross_partition', False):
+        #             external_edges.append({
+        #                 'type': 'in',
+        #                 'qubit_idx': e.get('qubit_idx', -1),
+        #                 'edge_rank': e.get('edge_rank', 0),
+        #                 'neighbor_partition': e.get('neighbor_partition', -1),
+        #                 'is_cross_partition': e.get('is_cross_partition', False),
+        #             })
+        #     # Process OUT edges
+        #     for e in entry.get('out_edge_list', []):
+        #         # print(f"[Rank {self.rank}] Found external OUT edge: qubit={e.get('qubit_idx')}, "
+        #         #         f"neighbor={e.get('neighbor_name')}, is_cross={e.get('is_cross_partition')}, "
+        #         #         f"neighbor_part={e.get('neighbor_partition', 'N/A')}")
+        #         # if e.get('is_cross_partition', False) or not e.get('neighbor_name'):
+        #         if e.get('is_cross_partition', False):
+        #             external_edges.append({
+        #                 'type': 'out',
+        #                 'qubit_idx': e.get('qubit_idx', -1),
+        #                 'edge_rank': e.get('edge_rank', 0),
+        #                 'neighbor_partition': e.get('neighbor_partition', -1),
+        #                 'is_cross_partition': e.get('is_cross_partition', False),
+        #             })
+        
+        # # Sort by qubit_idx to match tensor dimension order
+        # external_edges.sort(key=lambda x: (x['qubit_idx'], 0 if x['type'] == 'in' else 1))
+        
+        # print(f"[Rank {self.rank}] External edges ({len(external_edges)} total, {n_dims} tensor dims):")
+        # for i, e in enumerate(external_edges):
+        #     print(f"  dim[{i}]: {e['type'].upper()} qubit={e['qubit_idx']}, "
+        #           f"rank={e['edge_rank']}, neighbor_part={e['neighbor_partition']}, "
+        #           f"is_cross={e['is_cross_partition']}")
+        
+        # Now determine contract_dim_indices and non_contract_dim_indices
+        # Contract dims: edges connecting my_partitions to partner_partitions
         contract_dim_indices = []
         non_contract_dim_indices = []
         
-        for i, q_idx in enumerate(qubit_indices):
-            dim_idx_in = 2 * i  # in dim for this qubit
-            dim_idx_out = 2 * i + 1  # out dim for this qubit
-            if dim_idx_in < n_dims:
-                if q_idx in contract_qubit_indices:
-                    contract_dim_indices.append(dim_idx_in)
-                else:
-                    non_contract_dim_indices.append(dim_idx_in)
-            if dim_idx_out < n_dims:
-                if q_idx in contract_qubit_indices:
-                    contract_dim_indices.append(dim_idx_out)
-                else:
-                    non_contract_dim_indices.append(dim_idx_out)
+        # for dim_idx, edge in enumerate(external_edges):
+        #     if dim_idx >= n_dims:
+        #         break  # Safety check
+            
+        #     neighbor_part = edge.get('neighbor_partition', -1)
+        #     is_cross = edge.get('is_cross_partition', False)
+            
+        #     # An edge is a contract edge if:
+        #     # - It's a cross-partition edge AND
+        #     # - The neighbor partition is in partner_partitions
+        #     if is_cross and neighbor_part in partner_partitions:
+        #         contract_dim_indices.append(dim_idx)
+        #     else:
+        #         non_contract_dim_indices.append(dim_idx)
+        
+        # sort my_in_edges and my_out_edge with qubit_idx to match tensor dim order
+        my_in_edges.sort(key=lambda x: x['qubit_idx'])
+        my_out_edges.sort(key=lambda x: x['qubit_idx'])
+
+        # print(f"[Rank {self.rank}] Sorted my_in_edges by qubit_idx:")
+        # for i, e in enumerate(my_in_edges):
+        #     print(f"[Rank {self.rank}]  dim[{i}]: IN qubit={e['qubit_idx']}, to_part={e['to_partition']}, from_part={e['from_partition']}")
+        # print(f"[Rank {self.rank}] Sorted my_out_edges by qubit_idx:")
+        # for i, e in enumerate(my_out_edges):
+        #     print(f"[Rank {self.rank}]  dim[{i}]: OUT qubit={e['qubit_idx']}, to_part={e['to_partition']}, from_part={e['from_partition']}")
+
+        for dim_idx, in_edge in enumerate(my_in_edges):
+            neighbor_part = in_edge.get('from_partition', -1)
+            if neighbor_part in partner_partitions:
+                contract_dim_indices.append(dim_idx)
+                contract_dim_indices.append(n_dims - dim_idx - 1)
+            else:
+                non_contract_dim_indices.append(dim_idx)
+                non_contract_dim_indices.append(n_dims - dim_idx - 1)
+        offset = len(my_in_edges)
+        for dim_idx, out_edge in enumerate(my_out_edges):
+            neighbor_part = out_edge.get('to_partition', -1)
+            if neighbor_part in partner_partitions:
+                contract_dim_indices.append(offset + dim_idx)
+                contract_dim_indices.append(n_dims - (offset + dim_idx) - 1)
+            else:
+                non_contract_dim_indices.append(offset + dim_idx)
+                non_contract_dim_indices.append(n_dims - (offset + dim_idx) - 1)
+        
+        print(f"[Rank {self.rank}] Contract dim indices: {contract_dim_indices}")
+        print(f"[Rank {self.rank}] Non-contract dim indices: {non_contract_dim_indices}")
         
         # If no contract dims identified, fallback
         if not contract_dim_indices:
             print(f"[Rank {self.rank}] Warning: no contract dims found, using identity")
             return local_tensor
-        
+
         # Transpose: [batch, non_contract_dims..., contract_dims...]
         perm = [0] + [d + 1 for d in non_contract_dim_indices] + [d + 1 for d in contract_dim_indices]
         transposed = local_tensor.permute(perm)
@@ -1084,98 +1251,126 @@ class DistributedEngineSiamese:
         # Reshape to [batch, N, K] - N=1 if no non-contract dims, K=1 if no contract dims
         reshaped = transposed.reshape(batch_size, N, K)
         
+        # Synchronize reshaped tensor shapes across all ranks
+        # Each rank broadcasts its [batch_size, N, K] shape
+        # Result: all_shapes is a [world_size, 3] tensor
+        my_shape_tensor = torch.tensor([batch_size, N, K], dtype=torch.long, device=local_tensor.device)
+        all_shapes_list = self.comm.allgather(my_shape_tensor)
+        all_shapes = torch.stack(all_shapes_list, dim=0)  # [world_size, 3]
+        
+        print(f"[Rank {self.rank}] Synchronized reshaped shapes across all ranks: {all_shapes}")
+        
         print(f"[Rank {self.rank}] TP matmul: tensor shape {local_tensor.shape} -> "
               f"reshaped {reshaped.shape}, N={N}, K={K}, is_left={is_left_half}")
         
-        # Exchange with partner half using point-to-point communication
-        # Left half sends to right half and receives from right half
+        # =====================================================================
+        # TP Matrix Multiplication with K-dimension sharding
+        # =====================================================================
+        
+        # Identify left and right partitions for this stage
+        left_partition_ranks = group_ranks[:half_group_size]
+        right_partition_ranks = group_ranks[half_group_size:]
+        
+        # Get shapes from first node of each partition (they hold the authoritative shape)
+        left_first_rank = left_partition_ranks[0]
+        right_first_rank = right_partition_ranks[0]
+        
+        left_shape = all_shapes[left_first_rank]  # [batch, N_left, K_left]
+        right_shape = all_shapes[right_first_rank]  # [batch, N_right, K_right]
+        
+        # For matmul: left [B, N, K] @ right [B, M, K]^T = [B, N, M]
+        # K dimension must match and will be sharded across all nodes
+        K_total = left_shape[2].item()  # K dimension to shard
+        N_left = left_shape[1].item()
+        M_right = right_shape[1].item()  # This is M (right's N dimension)
+        
+        print(f"[Rank {self.rank}] TP setup: left_partition={left_partition_ranks}, "
+              f"right_partition={right_partition_ranks}, K_total={K_total}, "
+              f"N_left={N_left}, M_right={M_right}")
+        
+        # Compute K sharding across all nodes in the group
+        # Total nodes = group_size, shard K evenly with remainder to first nodes
+        total_nodes = group_size
+        base_k = K_total // total_nodes
+        remainder_k = K_total % total_nodes
+        
+        # Compute start/end indices for each rank's K shard
+        k_shards = []
+        k_start = 0
+        for i in range(total_nodes):
+            k_size = base_k + (1 if i < remainder_k else 0)
+            k_shards.append((k_start, k_start + k_size))
+            k_start += k_size
+        
+        my_global_position = my_position  # Position within group
+        my_k_start, my_k_end = k_shards[my_global_position]
+        my_k_size = my_k_end - my_k_start
+        
+        print(f"[Rank {self.rank}] K sharding: position={my_global_position}, "
+              f"k_range=[{my_k_start}:{my_k_end}], k_size={my_k_size}")
+        print(f"[Rank {self.rank}] All K shards: {k_shards}")
+        
+        # Determine partner rank for data exchange
+        # Left node i pairs with right node i
+        # e.g., rank 0 <-> rank 2, rank 1 <-> rank 3
         if is_left_half:
-            partner_rank = group_ranks[my_position + half_group_size]
+            partner_rank = right_partition_ranks[my_position]  # my_position is position in left half
+            partner_position = my_position + half_group_size  # partner's position in group
         else:
-            partner_rank = group_ranks[my_position - half_group_size]
+            partner_rank = left_partition_ranks[my_position - half_group_size]
+            partner_position = my_position - half_group_size
         
-        # Send our tensor and receive partner's tensor
-        partner_tensor = self._exchange_tensor_with_partner(reshaped, partner_rank)
+        # Get partner's K shard range
+        partner_k_start, partner_k_end = k_shards[partner_position]
         
-        print(f"[Rank {self.rank}] Received partner tensor shape: {partner_tensor.shape}")
+        print(f"[Rank {self.rank}] Partner for data exchange: rank {partner_rank}, "
+              f"partner_position={partner_position}, partner_k_range=[{partner_k_start}:{partner_k_end}]")
         
-        # Shard N dimension across the sub-group (left half or right half)
-        # Each sub-group has half_group_size ranks
-        sub_position = my_position if is_left_half else my_position - half_group_size
+        # Extract my K shard from local tensor (for my own computation)
+        my_k_shard = reshaped[:, :, my_k_start:my_k_end]  # [B, N, K_shard] or [B, M, K_shard]
         
-        # Handle uneven distribution:
-        # If N < half_group_size, only first N ranks get work
-        # If N >= half_group_size, distribute as evenly as possible (e.g., 9 -> 5,4 for 2 ranks)
-        if N < half_group_size:
-            # Not enough work for all ranks
-            if sub_position < N:
-                # This rank gets 1 element
-                start_idx = sub_position
-                end_idx = sub_position + 1
-                has_work = True
-            else:
-                # This rank has no work
-                start_idx = 0
-                end_idx = 0
-                has_work = False
+        # Extract the K shard to send to partner (using partner's K range)
+        k_shard_to_partner = reshaped[:, :, partner_k_start:partner_k_end]  # Partner needs this shard
+        
+        print(f"[Rank {self.rank}] My K shard shape: {my_k_shard.shape}, "
+              f"K shard to send to partner: {k_shard_to_partner.shape}")
+        
+        # Exchange K shards with partner
+        # I send my tensor sliced at partner's K range, partner sends their tensor sliced at my K range
+        partner_k_shard = self._exchange_tensor_with_partner(k_shard_to_partner, partner_rank)
+        
+        print(f"[Rank {self.rank}] Partner K shard received shape: {partner_k_shard.shape}")
+        
+        # Perform partial matrix multiplication
+        # Left: [B, N, K_shard] @ [B, K_shard, M] -> [B, N, M]
+        # Right: [B, M, K_shard] @ [B, K_shard, N] -> [B, M, N]
+        if is_left_half:
+            # I'm in left partition, I have left[B, N, K_shard], partner has right[B, M, K_shard]
+            # Compute: left @ right^T = [B, N, K_shard] @ [B, K_shard, M] = [B, N, M]
+            partner_T = partner_k_shard.transpose(1, 2)  # [B, K_shard, M]
+            partial_result = torch.bmm(my_k_shard, partner_T)  # [B, N, M]
         else:
-            # Distribute evenly with remainder going to first ranks
-            base_size = N // half_group_size
-            remainder = N % half_group_size
-            
-            # First 'remainder' ranks get (base_size + 1), rest get base_size
-            if sub_position < remainder:
-                shard_size = base_size + 1
-                start_idx = sub_position * (base_size + 1)
-            else:
-                shard_size = base_size
-                start_idx = remainder * (base_size + 1) + (sub_position - remainder) * base_size
-            
-            end_idx = start_idx + shard_size
-            has_work = shard_size > 0
+            # I'm in right partition, I have right[B, M, K_shard], partner has left[B, N, K_shard]
+            # Compute: left @ right^T = [B, N, K_shard] @ [B, K_shard, M] = [B, N, M]
+            # partner has [B, N, K_shard], I have [B, M, K_shard]
+            my_T = my_k_shard.transpose(1, 2)  # [B, K_shard, M]
+            partial_result = torch.bmm(partner_k_shard, my_T)  # [B, N, M]
         
-        print(f"[Rank {self.rank}] sub_position={sub_position}, N={N}, "
-              f"start={start_idx}, end={end_idx}, has_work={has_work}")
+        print(f"[Rank {self.rank}] Partial result shape: {partial_result.shape}")
         
-        if has_work:
-            # Get my shard of the local tensor
-            my_shard = reshaped[:, start_idx:end_idx, :]  # [batch, N_shard, K]
-            
-            # Perform matrix multiplication: [batch, N_shard, K] @ [batch, M, K]^T -> [batch, N_shard, M]
-            # Partner tensor is [batch, M, K], we want [batch, K, M] for matmul
-            M = partner_tensor.shape[1]
-            partner_T = partner_tensor.transpose(1, 2)  # [batch, K, M]
-            
-            partial_result = torch.bmm(my_shard, partner_T)  # [batch, N_shard, M]
-            
-            print(f"[Rank {self.rank}] Partial result shape: {partial_result.shape}")
-        else:
-            # No work for this rank, create empty tensor
-            M = partner_tensor.shape[1]
-            partial_result = torch.zeros(batch_size, 0, M, dtype=reshaped.dtype, device=reshaped.device)
-            print(f"[Rank {self.rank}] No work assigned, empty partial result")
+        # AllReduce within group to sum up partial results
+        # Each node computed a partial [B, N, M] from its K shard
+        # Sum them up to get full [B, N, M]
+        full_result = self.comm.allreduce(partial_result, op=ReduceOp.SUM)
         
-        # Gather all shards within sub-group using point-to-point communication
-        # This avoids requiring all ranks to participate in global allgather
-        sub_group_ranks = group_ranks[:half_group_size] if is_left_half else group_ranks[half_group_size:]
-        
-        # Collect shards from all ranks in sub-group using P2P communication
-        sub_group_shards = self._gather_shards_in_subgroup(partial_result, sub_group_ranks)
-        
-        # Concatenate along N dimension (filter out empty shards)
-        non_empty_shards = [s for s in sub_group_shards if s.shape[1] > 0]
-        if non_empty_shards:
-            full_result = torch.cat(non_empty_shards, dim=1)  # [batch, N, M]
-        else:
-            M = partner_tensor.shape[1]
-            full_result = torch.zeros(batch_size, N, M, dtype=reshaped.dtype, device=reshaped.device)
-        
-        print(f"[Rank {self.rank}] Full result shape: {full_result.shape}")
+        print(f"[Rank {self.rank}] Full result after allreduce: {full_result.shape}")
         
         # Reshape back to multi-dimensional tensor
-        # New shape: [batch, non_contract_dims..., partner_non_contract_dims...]
-        new_shape = [batch_size] + non_contract_shape + [M]
+        # New shape: [batch, non_contract_dims..., M]
+        new_shape = [batch_size] + non_contract_shape + [M_right]
         result = full_result.reshape(new_shape)
+        
+        print(f"[Rank {self.rank}] Final result shape: {result.shape}")
         
         return result
     
