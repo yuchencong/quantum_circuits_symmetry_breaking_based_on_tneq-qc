@@ -438,6 +438,112 @@ class DistributedTrainer:
         
         return stats
     
+    def train_distributed(self,
+                          data_list: List[Dict],
+                          circuit_states_list: List['torch.Tensor'],
+                          num_epochs: int = None,
+                          log_interval: int = None) -> Dict[str, Any]:
+        """
+        Execute distributed training using autograd through hierarchical contraction.
+        
+        This is the new training method that uses gradient-aware distributed
+        contraction with SGDG optimizer.
+        
+        Args:
+            data_list: Training data list (each item has 'measure_input_list')
+            circuit_states_list: Circuit states for all qubits
+            num_epochs: Number of epochs (default: config.max_steps)
+            log_interval: Logging interval (default: config.log_interval)
+            
+        Returns:
+            Training statistics dictionary
+        """
+        import time
+        
+        from ..optim.distributed_sgdg import DistributedSGDG, LRScheduler
+        
+        if num_epochs is None:
+            num_epochs = self.config.max_steps
+        if log_interval is None:
+            log_interval = self.config.log_interval
+        
+        # Create distributed SGDG optimizer
+        optimizer = DistributedSGDG(
+            lr=self.config.learning_rate,
+            momentum=self.config.momentum,
+            stiefel=self.config.stiefel,
+        )
+        
+        # Create LR scheduler if configured
+        lr_scheduler = None
+        if self.config.lr_schedule:
+            lr_scheduler = LRScheduler(optimizer, self.config.lr_schedule)
+        
+        # Training loop
+        total_loss = 0.0
+        num_batches = 0
+        start_time = time.time()
+        loss_history = []
+        
+        self._log(f"Starting distributed training: {num_epochs} epochs, "
+                  f"lr={self.config.learning_rate}, stiefel={self.config.stiefel}")
+        
+        for epoch in range(num_epochs):
+            epoch_loss = 0.0
+            epoch_batches = 0
+            
+            for batch_idx, data in enumerate(data_list):
+                measure_input_list = data.get('measure_input_list', data)
+                
+                # Execute training step
+                loss = self.engine.train_step(
+                    circuit_states_list=circuit_states_list,
+                    measure_input_list=measure_input_list,
+                    optimizer=optimizer,
+                    measure_is_matrix=True,
+                )
+                
+                epoch_loss += loss
+                epoch_batches += 1
+                total_loss += loss
+                num_batches += 1
+                
+                # Update LR scheduler
+                if lr_scheduler is not None:
+                    lr_scheduler.step()
+            
+            # Log epoch summary
+            avg_epoch_loss = epoch_loss / max(epoch_batches, 1)
+            loss_history.append(avg_epoch_loss)
+            
+            if epoch % log_interval == 0 or epoch == num_epochs - 1:
+                elapsed = time.time() - start_time
+                if self.comm.rank == 0:
+                    print(f"[Epoch {epoch}/{num_epochs}] "
+                          f"loss={avg_epoch_loss:.6f}, lr={optimizer.lr:.6f}, "
+                          f"elapsed={elapsed:.1f}s")
+        
+        # Final statistics
+        elapsed = time.time() - start_time
+        avg_loss = total_loss / max(num_batches, 1)
+        
+        stats = {
+            'final_loss': avg_loss,
+            'num_epochs': num_epochs,
+            'num_batches': num_batches,
+            'elapsed_time': elapsed,
+            'loss_history': loss_history,
+        }
+        
+        self._log(f"Training completed: final_loss={avg_loss:.6f}, "
+                  f"elapsed={elapsed:.1f}s")
+        
+        # Save final model if configured
+        if self.config.save_final_model:
+            self._save_final_model()
+        
+        return stats
+    
     # ==================== Checkpointing ====================
     
     def _save_final_model(self):

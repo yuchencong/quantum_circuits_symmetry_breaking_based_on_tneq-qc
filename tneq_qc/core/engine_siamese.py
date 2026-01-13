@@ -222,12 +222,12 @@ class EngineSiamese:
                 'strategy_name': strategy_name,
                 'cost': cost
             })
-            print(f"[EngineSiamese] Compiled and cached strategy: {strategy_name}")
+            # print(f"[EngineSiamese] Compiled and cached strategy: {strategy_name}")
         else:
             cached = getattr(qctn, cache_key)
             compute_fn = cached['compute_fn']
             strategy_name = cached['strategy_name']
-            print(f"[EngineSiamese] Using cached strategy: {strategy_name}")
+            # print(f"[EngineSiamese] Using cached strategy: {strategy_name}")
         
         # Prepare data
         # Pass cores weights directly to support TNTensor

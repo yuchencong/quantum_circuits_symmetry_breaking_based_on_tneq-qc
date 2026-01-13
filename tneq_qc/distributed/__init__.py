@@ -68,6 +68,14 @@ from .engine.distributed_engine import (
 from .trainer import DistributedTrainer
 from .trainer.distributed_trainer import DistributedConfig
 
+# Distributed optimization
+from .optim import (
+    AllReduceGrad,
+    allreduce_with_grad,
+    DistributedSGDG,
+)
+from .optim.distributed_sgdg import LRScheduler
+
 # Legacy genetic algorithm modules (existing)
 from .mpi_core import TAGS, SURVIVAL, REASONS, AGENT_STATUS, INDIVIDUAL_STATUS
 
@@ -117,6 +125,12 @@ __all__ = [
     # High-level trainer
     'DistributedTrainer',
     'DistributedConfig',
+    
+    # Distributed optimization
+    'AllReduceGrad',
+    'allreduce_with_grad',
+    'DistributedSGDG',
+    'LRScheduler',
     
     # Legacy (genetic algorithm)
     'TAGS',

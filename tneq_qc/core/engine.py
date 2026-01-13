@@ -109,12 +109,12 @@ class Engine:
                 'strategy_name': strategy_name,
                 'cost': cost
             })
-            print(f"[Engine] Compiled and cached strategy: {strategy_name}")
+            # print(f"[Engine] Compiled and cached strategy: {strategy_name}")
         else:
             cached = getattr(qctn, cache_key)
             compute_fn = cached['compute_fn']
             strategy_name = cached['strategy_name']
-            print(f"[Engine] Using cached strategy: {strategy_name}")
+            # print(f"[Engine] Using cached strategy: {strategy_name}")
         
         # Prepare data
         cores_dict = {name: self.backend.convert_to_tensor(qctn.cores_weights[name]) for name in qctn.cores}

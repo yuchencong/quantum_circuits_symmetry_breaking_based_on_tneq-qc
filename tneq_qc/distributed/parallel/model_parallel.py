@@ -530,7 +530,7 @@ class ModelParallelTrainer:
                 
                 # Create new TNTensor with updated tensor
                 new_weight = TNTensor(new_tensor, weight.scale)
-                new_weight.auto_scale()
+                # new_weight.auto_scale()
                 local_weights[core_name] = new_weight
             else:
                 # Regular tensor

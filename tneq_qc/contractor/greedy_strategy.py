@@ -874,7 +874,7 @@ def _contract_symmetric_group(
     
         # Create result TNTensor
         result_tensor = TNTensor(raw_result, scale=total_scale)
-        result_tensor.auto_scale()
+        # result_tensor.auto_scale()
     else:
         result_tensor = torch.einsum(einsum_eq, *tensor_list)
 
