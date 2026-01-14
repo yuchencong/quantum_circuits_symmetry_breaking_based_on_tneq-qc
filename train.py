@@ -38,12 +38,14 @@ if __name__ == "__main__":
 
     engine = EngineSiamese(backend=backend, strategy_mode="balanced", mx_K=100)
 
-    qctn_graph = QCTNHelper.generate_example_graph()
-    # print(f"qctn_graph: \n{qctn_graph}")
+    suffix="_exp2"
+    qctn_graph = QCTNHelper.generate_example_graph(n=9)
+    print(f"qctn_graph: \n{qctn_graph}")
+    exit()
     qctn = QCTN(qctn_graph, backend=engine.backend)
 
     N = 100
-    B = 128
+    B = 1280
     # B = 4
     D = qctn.nqubits
     K = 3
@@ -166,7 +168,7 @@ if __name__ == "__main__":
         beta2=0.95, 
         epsilon=1e-8,
         engine=engine,
-        lr_schedule=lr_schedule,
+        # lr_schedule=lr_schedule,
 
         momentum=0.9,            # 动量因子
         stiefel=True,            # 启用 Stiefel 流形优化
@@ -189,7 +191,7 @@ if __name__ == "__main__":
     print(f"Optimization Time: {toc - tic:.2f} seconds")
 
     # save cores
-    cores_file = "./assets/qctn_cores.safetensors"
+    cores_file = f"./assets/qctn_cores_{qctn.nqubits}qubits{suffix}.safetensors"
     qctn.save_cores(cores_file, metadata={"graph": "example"})
 
     exit()

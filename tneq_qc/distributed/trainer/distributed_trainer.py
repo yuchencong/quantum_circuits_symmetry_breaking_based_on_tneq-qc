@@ -237,10 +237,11 @@ class DistributedTrainer:
         self._init_qctn()
         
         # Initialize distributed contraction (partition the graph)
-        if self.qctn is not None and self.comm.world_size > 1:
-            self._contract_plan = self.engine.init_distributed(self.qctn)
-        else:
-            self._contract_plan = None
+        # if self.qctn is not None and self.comm.world_size > 1:
+        #     self._contract_plan = self.engine.init_distributed(self.qctn)
+        # else:
+        #     self._contract_plan = None
+        self._contract_plan = self.engine.init_distributed(self.qctn)
         
         # Setup checkpoint directory
         self.checkpoint_dir = Path(self.config.checkpoint_dir)
@@ -607,8 +608,10 @@ class DistributedTrainer:
         
         # Re-initialize distributed contraction plan
         # This will partition the graph and each process keeps only its local cores
-        if self.comm.world_size > 1:
-            self._contract_plan = self.engine.init_distributed(self.qctn)
+        # if self.comm.world_size > 1:
+        #     self._contract_plan = self.engine.init_distributed(self.qctn)
+        
+        self._contract_plan = self.engine.init_distributed(self.qctn)
         
         self._log(f"Loaded checkpoint: {checkpoint_path}")
     

@@ -30,6 +30,8 @@ class TNTensor:
                  self.scale = self._tensor.new_tensor(scale)
         else:
              self.scale = scale
+        import torch
+        self.scale = self.scale.to(torch.float64)
 
     @property
     def tensor(self) -> Any:
@@ -75,37 +77,6 @@ class TNTensor:
         
         # Normalize tensor
         self._tensor = self._tensor / max_val_float
-
-    def scale_to(self, new_scale: float):
-        """
-        Scale the tensor to a new scale value.
-        The actual represented value (tensor * scale) remains unchanged.
-        
-        Args:
-            new_scale (float): The new scale value.
-        """
-        new_scale = float(new_scale)
-        if new_scale == 0:
-             raise ValueError("Cannot scale to 0.")
-             
-        factor = self.scale / new_scale
-        self._tensor = self._tensor * factor
-        self.scale = new_scale
-
-    def scale_with(self, factor: float):
-        """
-        Multiply the scale by a factor, and divide the tensor by the same factor.
-        The actual represented value remains unchanged.
-        
-        Args:
-            factor (float): The factor to scale with.
-        """
-        factor = float(factor)
-        if factor == 0:
-            raise ValueError("Cannot scale with factor 0.")
-            
-        self.scale *= factor
-        self._tensor = self._tensor / factor
 
     def scale_to(self, new_scale: float):
         """

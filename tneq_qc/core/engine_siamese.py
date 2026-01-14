@@ -387,13 +387,6 @@ class EngineSiamese:
 
         return loss, grads
         
-        # Create value_and_grad function
-        value_and_grad_fn = self.backend.compute_value_and_grad(loss_fn, argnums=argnums)
-        
-        # Execute
-        loss, grads = value_and_grad_fn(*core_tensors)
-        
-        return loss, grads
 
     # ============================================================================
     # Probability Calculation Methods
@@ -478,9 +471,12 @@ class EngineSiamese:
             measure_is_matrix=True
         )
 
-        res.scale_to(1.0)
+        if isinstance(res, TNTensor):
+            res.scale_to(1.0)
 
-        return res.tensor
+            return res.tensor
+        else:
+            return res
 
     def calculate_conditional_probability(self, qctn, circuit_states_list, measure_input_list, 
                                           qubit_indices: List[int], target_indices: List[int]):

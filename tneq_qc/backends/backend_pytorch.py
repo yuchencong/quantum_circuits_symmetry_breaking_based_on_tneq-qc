@@ -165,8 +165,11 @@ class BackendPyTorch(ComputeBackend):
         
         for i, (is_tn, scale, tn_class) in enumerate(is_tntensor_info):
             if is_tn:
+                # params[i] = tn_class(new_raw_params[i], scale)
                 params[i] = tn_class(new_raw_params[i], 1.0)
                 params[i].scale_to(scale)
+                # params[i].auto_scale()
+
             else:
                 params[i] = new_raw_params[i]
                 

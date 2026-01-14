@@ -334,9 +334,7 @@ class DistributedEngineSiamese:
         else:
             self._local_qctn = None
 
-
         # self._print_local_qctn(self._local_qctn)
-        
         
         self._is_initialized = True
         
@@ -860,6 +858,7 @@ class DistributedEngineSiamese:
                                             measure_is_matrix)
         
         if self.world_size == 1:
+            print(f"[Rank {self.rank}] Single rank execution complete. Result shape: {local_result.shape}")
             return local_result
         
         local_print(f"[Rank {self.rank}] Local contraction complete. Result shape: {local_result.shape}")
@@ -1749,7 +1748,7 @@ class DistributedEngineSiamese:
             measure_is_matrix=measure_is_matrix
         )
 
-        print(f"[Rank {self.rank}] Contraction result shape: {result.shape} result: {result}")
+        local_print(f"[Rank {self.rank}] Contraction result shape: {result.shape} result: {result}")
         
         # Compute cross-entropy loss
         loss = self._compute_cross_entropy_loss(result, target)
@@ -1771,7 +1770,8 @@ class DistributedEngineSiamese:
             else:
                 grads.append(torch.zeros_like(tensor))
         
-        return loss.detach(), grads
+        # return loss.detach(), grads
+        return loss, grads
     
     def _compute_cross_entropy_loss(self, result: 'torch.Tensor', 
                                      target: 'torch.Tensor' = None) -> 'torch.Tensor':
@@ -1822,7 +1822,7 @@ class DistributedEngineSiamese:
             Loss value as float
         """
         # Zero gradients
-        optimizer.zero_grad(self._local_qctn)
+        # optimizer.zero_grad(self._local_qctn)
         
         # Forward + backward
         loss, grads = self.contract_distributed_with_gradient(
@@ -1851,3 +1851,85 @@ class DistributedEngineSiamese:
     def is_main_process(self) -> bool:
         """Check if this is the main process."""
         return self.rank == 0
+
+    # ==================== Distributed Model Saving ====================
+    
+    def save_cores_distributed(self, file_path: str, metadata: Optional[Dict[str, str]] = None):
+        """
+        Save all core weights from all processes to a single file.
+        
+        This method gathers core weights from all processes to rank 0,
+        then saves them to a safetensors file.
+        
+        Args:
+            file_path: Path to save the safetensors file
+            metadata: Optional metadata dictionary
+        """
+        import torch
+        import torch.distributed as dist
+        from ...core.tn_tensor import TNTensor
+        
+        if not self._is_initialized:
+            raise RuntimeError("Must call init_distributed() before save_cores_distributed()")
+        
+        # Step 1: Gather all partition info to rank 0
+        # Each rank has its own local_cores in _contract_plan
+        local_cores = self._contract_plan.local_cores if self._contract_plan else []
+        
+        # Prepare local weights dictionary
+        local_weights = {}
+        for name in local_cores:
+            if name in self._local_qctn.cores_weights:
+                weight = self._local_qctn.cores_weights[name]
+                if isinstance(weight, TNTensor):
+                    # Apply scale to get final value
+                    tensor = (weight.tensor * weight.scale).detach().cpu()
+                else:
+                    tensor = weight.detach().cpu()
+                local_weights[name] = tensor
+        
+        # Step 2: Gather all weights to rank 0
+        # Use all_gather_object for simplicity (works with any Python objects)
+        if self.world_size > 1:
+            # Gather core names from all ranks
+            all_weights_list = [None] * self.world_size
+            dist.all_gather_object(all_weights_list, local_weights)
+        else:
+            all_weights_list = [local_weights]
+        
+        # Step 3: Rank 0 merges and saves
+        if self.rank == 0:
+            try:
+                from safetensors.numpy import save_file
+            except ImportError as exc:
+                raise ImportError(
+                    "safetensors is required to save cores; "
+                    "install it with `pip install safetensors`."
+                ) from exc
+            
+            # Merge all weights
+            merged_weights = {}
+            for weights_dict in all_weights_list:
+                for name, tensor in weights_dict.items():
+                    merged_weights[name] = tensor
+            
+            # Convert to numpy and prepare for saving
+            tensor_dict = {}
+            for core_name, tensor in merged_weights.items():
+                if hasattr(tensor, 'numpy'):
+                    tensor_dict[f"core_{core_name}"] = tensor.numpy()
+                else:
+                    tensor_dict[f"core_{core_name}"] = tensor.cpu().numpy()
+            
+            # Prepare metadata
+            metadata_dict = {} if metadata is None else {str(k): str(v) for k, v in metadata.items()}
+            metadata_dict['world_size'] = str(self.world_size)
+            metadata_dict['num_cores'] = str(len(tensor_dict))
+            
+            # Save to file
+            save_file(tensor_dict, str(file_path), metadata=metadata_dict)
+            print(f"[DistributedEngine] Saved {len(tensor_dict)} cores to {file_path}")
+        
+        # Synchronize all processes
+        if self.world_size > 1:
+            dist.barrier()
