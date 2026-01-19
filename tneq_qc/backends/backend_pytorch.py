@@ -125,55 +125,66 @@ class BackendPyTorch(ComputeBackend):
         """
         Perform a single optimization step using PyTorch.
         """
-        raw_params = []
-        is_tntensor_info = []
-        
-        for p in params:
-            if hasattr(p, 'tensor') and hasattr(p, 'scale') and hasattr(p, 'auto_scale'):
-                scale = p.scale
-                p.scale_to(1.0)
-                raw_params.append(p.tensor)
-                is_tntensor_info.append((True, scale, type(p)))
-            else:
-                raw_params.append(p)
-                is_tntensor_info.append((False, None, None))
-        
-        scaled_grads = []
-        for i, g in enumerate(grads):
-            is_tn, scale, _ = is_tntensor_info[i]
-            if is_tn:
-                scaled_grads.append(g / scale)
-            else:
-                scaled_grads.append(g)
-        grads = scaled_grads
-
         with self.torch.no_grad():
-            if method == 'adam':
-                new_raw_params, new_state = self._adam_step(raw_params, grads, state, hyperparams)
-            elif method == 'sgd':
-                new_raw_params, new_state = self._sgd_step(raw_params, grads, state, hyperparams)
-            elif method == 'sgdg':
-                new_raw_params, new_state = self._sgdg_step(raw_params, grads, state, hyperparams)
-            elif method == 'momentum':
-                new_raw_params, new_state = self._momentum_step(raw_params, grads, state, hyperparams)
-            elif method == 'nesterov':
-                new_raw_params, new_state = self._nesterov_step(raw_params, grads, state, hyperparams)
-            elif method == 'rmsprop':
-                new_raw_params, new_state = self._rmsprop_step(raw_params, grads, state, hyperparams)
-            else:
-                raise ValueError(f"Unknown optimization method: {method}")
-        
-        for i, (is_tn, scale, tn_class) in enumerate(is_tntensor_info):
-            if is_tn:
-                # params[i] = tn_class(new_raw_params[i], scale)
-                params[i] = tn_class(new_raw_params[i], 1.0)
-                params[i].scale_to(scale)
-                # params[i].auto_scale()
+            raw_params = []
+            is_tntensor_info = []
+            
+            for p in params:
+                if hasattr(p, 'tensor') and hasattr(p, 'scale') and hasattr(p, 'auto_scale'):
+                    scale = p.scale
 
-            else:
-                params[i] = new_raw_params[i]
-                
-        return params, new_state
+                    # p.scale_to(1.0)
+                    # raw_params.append(p.tensor)
+                    
+                    # p.tensor /= scale
+                    
+                    raw_params.append(p.tensor * scale)
+                    
+                    is_tntensor_info.append((True, scale, type(p)))
+                else:
+                    raw_params.append(p)
+                    is_tntensor_info.append((False, None, None))
+            
+            scaled_grads = []
+            for i, g in enumerate(grads):
+                is_tn, scale, _ = is_tntensor_info[i]
+                if is_tn:
+                    scaled_grads.append(g / scale)
+                else:
+                    scaled_grads.append(g)
+            grads = scaled_grads
+
+            with self.torch.no_grad():
+                if method == 'adam':
+                    new_raw_params, new_state = self._adam_step(raw_params, grads, state, hyperparams)
+                elif method == 'sgd':
+                    new_raw_params, new_state = self._sgd_step(raw_params, grads, state, hyperparams)
+                elif method == 'sgdg':
+                    new_raw_params, new_state = self._sgdg_step(raw_params, grads, state, hyperparams)
+                elif method == 'momentum':
+                    new_raw_params, new_state = self._momentum_step(raw_params, grads, state, hyperparams)
+                elif method == 'nesterov':
+                    new_raw_params, new_state = self._nesterov_step(raw_params, grads, state, hyperparams)
+                elif method == 'rmsprop':
+                    new_raw_params, new_state = self._rmsprop_step(raw_params, grads, state, hyperparams)
+                else:
+                    raise ValueError(f"Unknown optimization method: {method}")
+            
+            for i, (is_tn, scale, tn_class) in enumerate(is_tntensor_info):
+                if is_tn:
+                    # new_raw_params[i] *= scale
+
+                    params[i] = tn_class(new_raw_params[i] / scale, scale)
+
+                    # params[i] = tn_class(new_raw_params[i], 1.0)
+                    # params[i].scale_to(scale)
+                    # params[i].auto_scale()
+
+                    # params[i].tensor.grad.zero_()
+                else:
+                    params[i] = new_raw_params[i]
+                    
+            return params, new_state
 
     def _adam_step(self, params, grads, state, hp):
         lr = hp.get('learning_rate', 0.01)

@@ -1,3 +1,4 @@
+import math
 from typing import Any
 
 class TNTensor:
@@ -8,30 +9,40 @@ class TNTensor:
     issues during tensor network contractions.
     """
     
-    def __init__(self, tensor: Any, scale: Any = 1.0):
+    def __init__(self, tensor: Any, scale: Any = 1.0, log_scale: float = None):
         """
         Initialize TNTensor.
         
         Args:
             tensor: The backend tensor (PyTorch tensor, JAX array, or NumPy array).
             scale: The scaling factor (float or tensor-like).
+            log_scale: The logarithm of the absolute value of the scale (float).
         """
         self._tensor = tensor
         
         # Initialize scale as a tensor compatible with self._tensor if possible
-        if hasattr(self._tensor, 'new_tensor'): # Likely PyTorch
-             if not hasattr(scale, 'shape') or len(scale.shape) == 0:
-                 # Check if scale is already a tensor
-                 if hasattr(scale, 'to') and hasattr(scale, 'device'):
-                     self.scale = scale.to(self._tensor.device)
-                 else:
-                     self.scale = self._tensor.new_tensor(scale)
-             else:
-                 self.scale = self._tensor.new_tensor(scale)
+        # if hasattr(self._tensor, 'new_tensor'): # Likely PyTorch
+        #      if not hasattr(scale, 'shape') or len(scale.shape) == 0:
+        #          # Check if scale is already a tensor
+        #          if hasattr(scale, 'to') and hasattr(scale, 'device'):
+        #              self.scale = scale.to(self._tensor.device)
+        #          else:
+        #              self.scale = self._tensor.new_tensor(scale)
+        #      else:
+        #          self.scale = self._tensor.new_tensor(scale)
+        # else:
+        #      self.scale = scale
+        # import torch
+        # self.scale = self.scale.to(torch.float64)
+
+        # import numpy as np
+        # self.scale = np.float64(scale)
+        self.scale = float(scale)
+
+        if log_scale is not None:
+            self.log_scale = log_scale
         else:
-             self.scale = scale
-        import torch
-        self.scale = self.scale.to(torch.float64)
+            self.log_scale = math.log(abs(self.scale)) if self.scale != 0 else float('-inf')
 
     @property
     def tensor(self) -> Any:
@@ -58,25 +69,20 @@ class TNTensor:
         Automatically scale the tensor so that its absolute max value is 1.
         Updates self.scale accordingly.
         """
-        # Calculate the maximum absolute value
-        # We use abs() and max() which should work for PyTorch, JAX, and NumPy
         max_val = self._tensor.abs().max()
         
-        # Convert to float for the scale calculation
-        # .item() works for PyTorch, JAX, and NumPy scalars
         if hasattr(max_val, 'item'):
             max_val_float = max_val.item()
         else:
             max_val_float = float(max_val)
             
         if max_val_float == 0:
-            return # Tensor is all zeros, no scaling needed
+            return
 
-        # Update scale
+        self._tensor /= max_val_float
+
         self.scale *= max_val_float
-        
-        # Normalize tensor
-        self._tensor = self._tensor / max_val_float
+        self.log_scale += math.log(abs(max_val_float))
 
     def scale_to(self, new_scale: float):
         """
@@ -91,8 +97,11 @@ class TNTensor:
              raise ValueError("Cannot scale to 0.")
              
         factor = self.scale / new_scale
+
         self._tensor = self._tensor * factor
+
         self.scale = new_scale
+        self.log_scale = math.log(abs(self.scale))
 
     def scale_with(self, factor: float):
         """
@@ -105,9 +114,11 @@ class TNTensor:
         factor = float(factor)
         if factor == 0:
             raise ValueError("Cannot scale with factor 0.")
-            
-        self.scale *= factor
+
         self._tensor = self._tensor / factor
+
+        self.scale *= factor
+        self.log_scale += math.log(abs(factor))
 
     def __repr__(self):
         shape = getattr(self._tensor, 'shape', 'unknown')

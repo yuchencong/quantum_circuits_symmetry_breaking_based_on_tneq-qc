@@ -854,14 +854,24 @@ def _contract_symmetric_group(
     
     # Check for TNTensors and prepare inputs for einsum
     raw_tensor_list = []
-    total_scale = 1.0
+    total_scale = None
+    total_log_scale = None
     has_tntensor = False
 
     for t in tensor_list:
         if isinstance(t, TNTensor):
             has_tntensor = True
             raw_tensor_list.append(t.tensor)
-            total_scale *= t.scale
+            if total_scale is None:
+                # total_scale = 1.0 * t.scale
+                total_scale = t.scale #.detach().clone()
+            else:
+                total_scale *= t.scale #.detach().clone()
+            
+            if total_log_scale is None:
+                total_log_scale = t.log_scale
+            else:
+                total_log_scale += t.log_scale
         else:
             raw_tensor_list.append(t)
     
@@ -872,9 +882,20 @@ def _contract_symmetric_group(
         # Use raw tensors for contraction
         raw_result = torch.einsum(einsum_eq, *raw_tensor_list)
     
+        # raw_result = raw_result.contiguous()
+        # tmp = raw_result.abs().max().detach().item()
+        # raw_result /= tmp
+        # total_scale *= tmp
+
+        # result_tensor = TNTensor(raw_result / tmp, scale=total_scale * tmp)
+
         # Create result TNTensor
-        result_tensor = TNTensor(raw_result, scale=total_scale)
-        # result_tensor.auto_scale()
+        result_tensor = TNTensor(raw_result, scale=total_scale, log_scale=total_log_scale)
+        # result_tensor = TNTensor(raw_result, scale=total_scale)
+
+        # tmp = result_tensor.tensor.abs().max()
+        
+        result_tensor.auto_scale()
     else:
         result_tensor = torch.einsum(einsum_eq, *tensor_list)
 

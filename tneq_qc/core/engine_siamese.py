@@ -333,9 +333,11 @@ class EngineSiamese:
             if isinstance(result, TNTensor):
                 res_tensor = result.tensor
                 res_scale = result.scale
+                res_log_scale = result.log_scale
             else:
                 res_tensor = result
                 res_scale = 1.0
+                res_log_scale = 0.0
             
             # Compute Cross Entropy loss
             # Target is all ones (maximizing probability)
@@ -346,21 +348,26 @@ class EngineSiamese:
             log_result = self.backend.log(res_tensor)
 
             # print(f"res_tensor : {res_tensor}, res_scale: {res_scale}")
+            print(f"res_scale: {res_scale}")
+            print(f"res_log_scale: {res_log_scale}")
 
             # Add log(scale) for correct loss value (log(P*S) = log(P) + log(S))
             # log(S) is constant w.r.t parameters, so gradients are correct
-            detached_scale = self.backend.detach(res_scale)
+            # detached_scale = self.backend.detach(res_scale)
+            # # detached_scale = res_scale
             
-            # # Handle float/scalar scale for log
-            # import torch
-            if isinstance(detached_scale, (int, float)):
-                 log_scale = np.log(detached_scale)
-            else:
-                 # Check if 0-dim tensor
-                 if detached_scale.ndim == 0:
-                      log_scale = self.backend.log(detached_scale)
-                 else:
-                      log_scale = self.backend.log(detached_scale)
+            # # # Handle float/scalar scale for log
+            # # import torch
+            # if isinstance(detached_scale, (int, float)):
+            #      log_scale = np.log(detached_scale)
+            # else:
+            #      # Check if 0-dim tensor
+            #      if detached_scale.ndim == 0:
+            #           log_scale = self.backend.log(detached_scale)
+            #      else:
+            #           log_scale = self.backend.log(detached_scale)
+
+            log_scale = self.backend.detach(res_log_scale)
 
             # print('log_scale', log_scale)
 
