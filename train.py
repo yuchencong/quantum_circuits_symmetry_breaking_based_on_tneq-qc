@@ -10,6 +10,8 @@ from tneq_qc.optim.optimizer import Optimizer
 import numpy as np
 import torch
 import math
+from typing import Any
+from tqdm import tqdm
 
 def generate_circuit_states_list(num_qubits, K, device='cuda'):
     """
@@ -38,18 +40,18 @@ if __name__ == "__main__":
 
     engine = EngineSiamese(backend=backend, strategy_mode="balanced", mx_K=100)
 
-    suffix="_exp2"
-    qctn_graph = QCTNHelper.generate_example_graph(n=9)
-    print(f"qctn_graph: \n{qctn_graph}")
-    exit()
+    suffix = "_exp11"
+    qctn_graph = QCTNHelper.generate_example_graph(n=17)
+    # print(f"qctn_graph: \n{qctn_graph}")
+    # exit()
     qctn = QCTN(qctn_graph, backend=engine.backend)
 
     N = 100
-    B = 1280
-    # B = 4
+    B = 1024
+    # B = 1
     D = qctn.nqubits
     K = 3
-    num_step = 1000
+    num_step = 300
 
     data_list = []
     
@@ -57,7 +59,10 @@ if __name__ == "__main__":
     
     for i in range(N):
         x = torch.empty((B, D), device=device).normal_(mean=0.0, std=1.0)
-        Mx_list, out = engine.generate_data(x, K=K)
+
+        Mx_list, out = engine.generate_data(x, K=K, ret_type='TNTensor')
+        # Mx_list, out = engine.generate_data(x, K=K)
+
         data_list += [({"measure_input_list": Mx_list}, out)]
 
     # data_list structure is [(dict, out), ...]
@@ -65,6 +70,17 @@ if __name__ == "__main__":
     data_list_for_optim = [x[0] for x in data_list]
 
     circuit_states_list = generate_circuit_states_list(num_qubits=D, K=K, device=backend.backend_info.device)
+
+
+    # for i in tqdm(range(1000)):
+    #     with torch.no_grad():
+    #         result = engine.contract_with_compiled_strategy(qctn, 
+    #                                             circuit_states_list=circuit_states_list,
+    #                                             measure_input_list=data_list_for_optim[i % N]["measure_input_list"], 
+    #                                             measure_is_matrix=True,
+    #                                             )
+    #     print(f"Initial Result: {[result[x].item() for x in range(10)]}")
+    # exit()
 
     # torch profiler memory usage test
     import torch.profiler
@@ -163,7 +179,8 @@ if __name__ == "__main__":
         max_iter=num_step, 
         # tol=1e-6, 
         tol=0.0, 
-        learning_rate=1e-2, 
+        # learning_rate=1e-2, 
+        learning_rate=1e-3, 
         beta1=0.9, 
         beta2=0.95, 
         epsilon=1e-8,
@@ -193,6 +210,8 @@ if __name__ == "__main__":
     # save cores
     cores_file = f"./assets/qctn_cores_{qctn.nqubits}qubits{suffix}.safetensors"
     qctn.save_cores(cores_file, metadata={"graph": "example"})
+    
+    print(f"Saved trained QCTN cores to {cores_file}")
 
     exit()
 

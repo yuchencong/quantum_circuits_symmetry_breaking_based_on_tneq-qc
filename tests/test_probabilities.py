@@ -351,8 +351,28 @@ if __name__ == "__main__":
     #                       device='cpu')
     # test_sampling(qctn_cores_file="./assets/qctn_cores.safetensors", device='cpu')
 
-    test_heatmap_marginal(qctn_cores_file="./assets/qctn_cores_17qubits_exp2.safetensors",
-                          output_file = './assets/marginal_probability_heatmap_17qubits_02.png',
+    # test_heatmap_marginal(qctn_cores_file="./assets/qctn_cores_65qubits_exp1.safetensors",
+    #                       output_file = './assets/marginal_probability_heatmap_65qubits_01.png',
+    #                       device='cpu')
+
+    # exit()
+
+    # test_heatmap_marginal(qctn_cores_file="./assets/qctn_cores_1025qubits_exp1.safetensors",
+    #                       output_file = './assets/marginal_probability_heatmap_1025qubits_01.png',
+    #                       device='cpu')
+
+    test_heatmap_marginal(qctn_cores_file="./assets/qctn_cores_17qubits_exp11.safetensors",
+                          output_file = './assets/marginal_probability_heatmap_17qubits_11.png',
+                          device='cpu')
+    exit()
+    
+    test_heatmap_marginal(qctn_cores_file="./assets/qctn_cores_9qubits_exp1.safetensors",
+                          output_file = './assets/marginal_probability_heatmap_9qubits_01.png',
+                          device='cpu')
+    exit()
+
+    test_heatmap_marginal(qctn_cores_file="./assets/qctn_cores_129qubits_exp1.safetensors",
+                          output_file = './assets/marginal_probability_heatmap_129qubits_01.png',
                           device='cpu')
 
     test_heatmap_marginal(qctn_cores_file="./assets/qctn_cores_17qubits.safetensors",

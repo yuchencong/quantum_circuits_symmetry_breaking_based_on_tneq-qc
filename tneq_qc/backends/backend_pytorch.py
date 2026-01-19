@@ -139,6 +139,7 @@ class BackendPyTorch(ComputeBackend):
                     # p.tensor /= scale
                     
                     raw_params.append(p.tensor * scale)
+                    # raw_params.append(p.tensor)
                     
                     is_tntensor_info.append((True, scale, type(p)))
                 else:
@@ -175,6 +176,7 @@ class BackendPyTorch(ComputeBackend):
                     # new_raw_params[i] *= scale
 
                     params[i] = tn_class(new_raw_params[i] / scale, scale)
+                    # params[i] = tn_class(new_raw_params[i])
 
                     # params[i] = tn_class(new_raw_params[i], 1.0)
                     # params[i].scale_to(scale)

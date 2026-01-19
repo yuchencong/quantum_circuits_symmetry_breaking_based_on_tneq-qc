@@ -536,6 +536,7 @@ class GreedyStrategy(ContractionStrategy):
             # ========================================
             # Step 4: Return final result
             # ========================================
+            # print(f"Final core_tensor_list length: {len(core_tensor_list)}")
             if len(core_tensor_list) == 1:
                 return _get_tensor(core_tensor_list[0], cores_dict, circuit_states, measure_matrices)
             elif len(core_tensor_list) == 0:
@@ -882,10 +883,12 @@ def _contract_symmetric_group(
         # Use raw tensors for contraction
         raw_result = torch.einsum(einsum_eq, *raw_tensor_list)
     
+        # import numpy as np
         # raw_result = raw_result.contiguous()
         # tmp = raw_result.abs().max().detach().item()
         # raw_result /= tmp
         # total_scale *= tmp
+        # total_log_scale += np.log(tmp)
 
         # result_tensor = TNTensor(raw_result / tmp, scale=total_scale * tmp)
 
@@ -895,7 +898,7 @@ def _contract_symmetric_group(
 
         # tmp = result_tensor.tensor.abs().max()
         
-        result_tensor.auto_scale()
+        # result_tensor.auto_scale()
     else:
         result_tensor = torch.einsum(einsum_eq, *tensor_list)
 

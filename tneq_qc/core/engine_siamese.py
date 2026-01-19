@@ -108,7 +108,7 @@ class EngineSiamese:
 
         return H
 
-    def generate_data(self, x, K: int = None):
+    def generate_data(self, x, K: int = None, ret_type='tensor'):
         """
         Generate data (Mx and phi_x) for a given batch of x.
 
@@ -164,7 +164,13 @@ class EngineSiamese:
         # Mx_list = [Mx[:, i, :, :] for i in range(num_qubits)] # List of [B, K, K]
         Mx_list = []
         for i in range(num_qubits):
-            Mx_list.append(Mx[:, i, :, :])
+            tmp = Mx[:, i, :, :]
+
+            if ret_type == "TNTensor":
+                tmp = TNTensor(tmp)
+                tmp.auto_scale()
+
+            Mx_list.append(tmp)
         
         return Mx_list, out
 
@@ -259,7 +265,10 @@ class EngineSiamese:
         circuit_states = circuit_states_list
         states_shape = tuple([s.shape if s is not None else () for s in circuit_states_list])
 
-        measure_shape = tuple([m.shape if m is not None else () for m in measure_input_list])
+        if isinstance(measure_input_list[0], TNTensor):
+            measure_shape = tuple([m.tensor.shape if m is not None else () for m in measure_input_list])
+        else:
+            measure_shape = tuple([m.shape if m is not None else () for m in measure_input_list])
         measure_input = measure_input_list
         
         shapes_info = {
@@ -348,8 +357,9 @@ class EngineSiamese:
             log_result = self.backend.log(res_tensor)
 
             # print(f"res_tensor : {res_tensor}, res_scale: {res_scale}")
-            print(f"res_scale: {res_scale}")
-            print(f"res_log_scale: {res_log_scale}")
+            # print(f"log_result: {log_result.mean().item()}")
+            # print(f"res_scale: {res_scale}")
+            # print(f"res_log_scale: {res_log_scale}")
 
             # Add log(scale) for correct loss value (log(P*S) = log(P) + log(S))
             # log(S) is constant w.r.t parameters, so gradients are correct
@@ -367,7 +377,9 @@ class EngineSiamese:
             #      else:
             #           log_scale = self.backend.log(detached_scale)
 
-            log_scale = self.backend.detach(res_log_scale)
+            log_scale = np.log(res_scale)
+            # log_scale = self.backend.log(self.backend.detach(res_scale))
+            # log_scale = self.backend.detach(res_log_scale)
 
             # print('log_scale', log_scale)
 
