@@ -73,6 +73,9 @@ class DistributedSGDG:
             
             # Handle TNTensor
             from ...core.tn_tensor import TNTensor
+            
+            # print(f"scale of {name} {isinstance(param, TNTensor)}: {param.scale if isinstance(param, TNTensor) else 1.0}")
+            
             if isinstance(param, TNTensor):
                 tensor = param.tensor
                 scale = param.scale
@@ -80,18 +83,31 @@ class DistributedSGDG:
                 tensor = param
                 scale = 1.0
             
-            if self.stiefel:
-                # Stiefel manifold optimization
-                updated_tensor = self._stiefel_update(tensor, grad, name)
-            else:
-                # Standard SGD
-                updated_tensor = tensor - self.lr * grad
-            
+            with torch.no_grad():
+                grad = grad / scale
+                tensor = tensor * scale
+
+                if isinstance(param, TNTensor):
+                    self.lr /= 10
+
+                if self.stiefel:
+                    # Stiefel manifold optimization
+                    updated_tensor = self._stiefel_update(tensor, grad, name)
+                else:
+                    # Standard SGD
+                    updated_tensor = tensor - self.lr * grad
+                
+                if isinstance(param, TNTensor):
+                    self.lr *= 10
+
+                updated_tensor = updated_tensor / scale
+
             # CRITICAL: Detach the updated tensor from the computation graph
             # This prevents "backward through the graph a second time" error
             # when training multiple iterations
             # updated_tensor = updated_tensor.detach().requires_grad_(True)
-            
+            updated_tensor.requires_grad_(True)
+
             # Update the weight
             if isinstance(param, TNTensor):
                 local_qctn.cores_weights[name] = TNTensor(updated_tensor, scale)

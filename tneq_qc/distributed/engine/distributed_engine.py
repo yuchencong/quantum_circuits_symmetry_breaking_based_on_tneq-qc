@@ -279,7 +279,7 @@ class DistributedEngineSiamese:
         """Access the strategy compiler."""
         return self._base_engine.strategy_compiler
     
-    def generate_data(self, x, K=None):
+    def generate_data(self, x, K=None, ret_type='tensor'):
         """
         Generate measurement matrices from input data.
         
@@ -292,7 +292,7 @@ class DistributedEngineSiamese:
         Returns:
             (Mx_list, extra_info)
         """
-        return self._base_engine.generate_data(x, K=K)
+        return self._base_engine.generate_data(x, K=K, ret_type=ret_type)
     
     # ==================== Distributed Initialization ====================
     
@@ -857,8 +857,10 @@ class DistributedEngineSiamese:
               f"input_qubits={input_qubit_indices}, output_qubits={output_qubit_indices}")
 
         local_result = self._contract_local(local_circuit_states_list, local_measure_input_list, 
-                                            measure_is_matrix)
+                                            measure_is_matrix, ret_type='TNTensor')
         
+        print(f"local_result {isinstance(local_result, TNTensor)}")
+
         if self.world_size == 1:
             print(f"[Rank {self.rank}] Single rank execution complete. Result shape: {local_result.shape}")
             return local_result
@@ -878,7 +880,8 @@ class DistributedEngineSiamese:
     def _contract_local(self,
                         circuit_states_list: List,
                         measure_input_list: List,
-                        measure_is_matrix: bool = True) -> 'torch.Tensor':
+                        measure_is_matrix: bool = True,
+                        ret_type: str = 'tensor') -> 'torch.Tensor':
         """
         Execute local contraction (Stage 0).
         
@@ -899,7 +902,8 @@ class DistributedEngineSiamese:
             qctn,
             circuit_states_list=circuit_states_list,
             measure_input_list=measure_input_list,
-            measure_is_matrix=measure_is_matrix
+            measure_is_matrix=measure_is_matrix,
+            ret_type=ret_type
         )
         
         return result
@@ -1038,43 +1042,6 @@ class DistributedEngineSiamese:
         my_partition = self.rank  # Assuming 1:1 mapping between rank and partition
         all_cross_edges = self._contract_plan.inter_node_graph.get('cross_edges', [])
         
-        # if self.rank == 0:
-        #     local_print(f"\n[Rank {self.rank}] === Cross Edges for Partition {my_partition} (Stage {stage_idx}) ===")
-        #     local_print(f"  Input tensor shape: {local_tensor.shape}")
-        #     local_print(f"  Contract qubit indices for this stage: {contract_qubit_indices}")
-            
-        #     # Find edges where this partition is the source (OUT edges)
-        #     out_edges = [e for e in all_cross_edges if e['from_partition'] == my_partition]
-        #     local_print(f"  OUT edges (from this partition):")
-        #     if out_edges:
-        #         for edge in out_edges:
-        #             is_contract = edge['qubit_idx'] in contract_qubit_indices
-        #             marker = " [CONTRACT]" if is_contract else ""
-        #             local_print(f"    -> P{edge['to_partition']}: qubit={edge['qubit_idx']}, "
-        #                 f"edge_rank={edge['edge_rank']}, "
-        #                 f"from_core={edge.get('from_partition', 'N/A')}, "
-        #                 f"to_core={edge.get('to_partition', 'N/A')}{marker}")
-        #     else:
-        #         local_print(f"    (none)")
-            
-        #     # Find edges where this partition is the destination (IN edges)
-        #     in_edges = [e for e in all_cross_edges if e['to_partition'] == my_partition]
-        #     local_print(f"  IN edges (to this partition):")
-        #     if in_edges:
-        #         for edge in in_edges:
-        #             is_contract = edge['qubit_idx'] in contract_qubit_indices
-        #             marker = " [CONTRACT]" if is_contract else ""
-        #             local_print(f"    <- P{edge['from_partition']}: qubit={edge['qubit_idx']}, "
-        #                 f"edge_rank={edge['edge_rank']}, "
-        #                 f"from_core={edge.get('from_partition', 'N/A')}, "
-        #                 f"to_core={edge.get('to_partition', 'N/A')}{marker}")
-        #     else:
-        #         local_print(f"    (none)")
-        #     local_print(f"[Rank {self.rank}] =====================================\n")
-        
-        # Get qubit dimension info from local_qctn
-        # The tensor dims after batch are ordered based on cross-partition edges
-        
         batch_size = local_tensor.shape[0]
         remaining_dims = list(local_tensor.shape[1:])
         n_dims = len(remaining_dims)
@@ -1083,10 +1050,6 @@ class DistributedEngineSiamese:
         # Define left_partitions, right_partitions based on group structure
         # =====================================================================
         
-        # For stage k, group_size = 2^k
-        # My group contains partitions: [group_start, group_start + group_size - 1]
-        # Left half: [group_start, group_start + half_group_size - 1]
-        # Right half: [group_start + half_group_size, group_start + group_size - 1]
         my_partition = self.rank
         my_group_idx = my_partition // group_size
         group_start = my_group_idx * group_size
@@ -1101,16 +1064,7 @@ class DistributedEngineSiamese:
         # Get all cross edges from contract plan
         all_cross_edges = self._contract_plan.inter_node_graph.get('cross_edges', [])
         
-        # =====================================================================
-        # Compute in_edges, out_edges, permute, contract_dim for BOTH partitions
-        # Each partition needs: in_edges, out_edges sorted by qubit
-        # Then compute contract_dim, non_contract_dim indices
-        # Track dim_info: for each dim after permute, record:
-        #   - is_contract: bool
-        #   - edge_type: 'in' or 'out'
-        #   - edge_idx: index in that edge list
-        # =====================================================================
-        
+
         def compute_partition_info(partitions, partner_partitions, n_dims):
             """
             Compute in_edges, out_edges, permute, contract_dim info for a set of partitions.
@@ -1228,21 +1182,6 @@ class DistributedEngineSiamese:
         # Compute info for both left and right partitions
         left_info = compute_partition_info(left_partitions, right_partitions, n_dims)
         right_info = compute_partition_info(right_partitions, left_partitions, n_dims)
-        
-        # if stage_idx == 2:
-        #     if self.rank == 0:
-        #         local_print(f"[Rank {self.rank}] Left partition info:")
-        #         local_print(f"  in_edges: {len(left_info['in_edges'])}, out_edges: {len(left_info['out_edges'])}")
-        #         local_print(f"  contract_dims: {left_info['contract_dim_indices']}")
-        #         local_print(f"  non_contract_dims: {left_info['non_contract_dim_indices']}")
-        #         local_print(f"  perm: {left_info['perm']}")
-                
-        #         local_print(f"[Rank {self.rank}] Right partition info:")
-        #         local_print(f"  in_edges: {len(right_info['in_edges'])}, out_edges: {len(right_info['out_edges'])}")
-        #         local_print(f"  contract_dims: {right_info['contract_dim_indices']}")
-        #         local_print(f"  non_contract_dims: {right_info['non_contract_dim_indices']}")
-        #         local_print(f"  perm: {right_info['perm']}")
-        #     exit()
         
         # Select my partition's info based on is_left_half
         if is_left_half:
@@ -1758,8 +1697,8 @@ class DistributedEngineSiamese:
         local_print(f"[Rank {self.rank}] Contraction result shape: {result.shape} result: {result}")
         
         # Debug: Check if result is connected to computation graph
-        local_print(f"[Rank {self.rank}] result.requires_grad: {result.requires_grad}")
-        local_print(f"[Rank {self.rank}] result.grad_fn: {result.grad_fn}")
+        local_print(f"[Rank {self.rank}] result.requires_grad: {result.tensor.requires_grad}")
+        local_print(f"[Rank {self.rank}] result.grad_fn: {result.tensor.grad_fn}")
         
         # Compute cross-entropy loss
         loss = self._compute_cross_entropy_loss(result, target)
@@ -1825,7 +1764,7 @@ class DistributedEngineSiamese:
         # return loss.detach(), grads
 
         # print(f"[Rank {self.rank}] core_weights names: {[(name, qctn.cores_weights[name].tensor.mean() if isinstance(qctn.cores_weights[name], TNTensor) else qctn.cores_weights[name].mean()) for name in core_names]}")
-        print(f"[Rank {self.rank}] Loss: {loss.item()}, Collected {[grad.mean().item() for grad in grads]} gradients.")
+        # print(f"[Rank {self.rank}] Loss: {loss.item()}, Collected {[grad.mean().item() for grad in grads]} gradients.")
         # print(f"[Rank {self.rank}] measure_input_list mean: {[m.mean().item() for m in measure_input_list]}")
         
 
@@ -1845,15 +1784,23 @@ class DistributedEngineSiamese:
         """
         import torch
         
+        if isinstance(result, TNTensor):
+            res_tensor = result.tensor
+            res_scale = result.scale
+        else:
+            res_tensor = result
+            res_scale = 1.0
+
+
         if target is None:
             # Default: maximize all probabilities
-            target = torch.ones_like(result)
+            target = torch.ones_like(res_tensor)
         
         # Avoid log(0)
-        result_clamped = torch.clamp(result, min=1e-10)
+        result_clamped = torch.clamp(res_tensor, min=1e-10)
         
         # Cross-entropy: -mean(target * log(result))
-        log_result = torch.log(result_clamped)
+        log_result = torch.log(result_clamped) + torch.log(torch.tensor(res_scale))
         loss = -torch.mean(target * log_result)
         
         return loss

@@ -179,7 +179,7 @@ class EngineSiamese:
     # Strategy-based Compilation Methods (NEW API)
     # ============================================================================
 
-    def contract_with_compiled_strategy(self, qctn, circuit_states_list, measure_input_list, measure_is_matrix=True):
+    def contract_with_compiled_strategy(self, qctn, circuit_states_list, measure_input_list, measure_is_matrix=True, ret_type='tensor') -> Any:
         """
         Contract using compiled strategy (auto-selected based on mode).
         
@@ -244,8 +244,10 @@ class EngineSiamese:
         
         if isinstance(result, TNTensor):
             # result.scale_to(1.0)
-
-            return result.tensor
+            if ret_type == 'TNTensor':
+                return result
+            else:
+                return result.tensor
         else:
             return result
 

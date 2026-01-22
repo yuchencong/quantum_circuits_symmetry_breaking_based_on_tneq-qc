@@ -30,7 +30,7 @@ class QCTNHelper:
             yield symbol
 
     @staticmethod
-    def generate_example_graph(n=16, target=False):
+    def generate_example_graph(n=16, target=False, dim_char=None):
         """Generate an example quantum circuit graph."""
         if target:
             return  "-2-A-5-----C-3-----E-2-\n" \
@@ -39,14 +39,15 @@ class QCTNHelper:
                     "-2-----B-6-----D-----2-\n" \
                     "-2-A-3-----C-8-D-----2-"
         else:
-            def generate_std_graph(n):
+            def generate_std_graph(n, dim_char=None):
                 graph = ""
                 # char_list = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z']
                 # char_list = [next(QCTNHelper.iter_symbols(True)) for _ in range(n)]
                 import opt_einsum
                 char_list = [opt_einsum.get_symbol(i) for i in range(n)]
 
-                dim_char = '3'
+                if dim_char is None:
+                    dim_char = '3'
 
                 for i in range(n):
                     cid = i - 1
@@ -67,7 +68,7 @@ class QCTNHelper:
                     graph += line + "\n"
                 return graph
             
-            return generate_std_graph(n)
+            return generate_std_graph(n, dim_char)
         
             # return  "-3-A-3-"
             # return  "-3-A-3-B-3-C-3-D-3-"
@@ -524,9 +525,9 @@ class QCTN:
             full_shape = input_shape + output_shape
             core = self.backend.reshape(core, full_shape)
 
-            # self.cores_weights[core_name] = TNTensor(core)
-            self.cores_weights[core_name] = core
-            # self.cores_weights[core_name].auto_scale()
+            self.cores_weights[core_name] = TNTensor(core)
+            # self.cores_weights[core_name] = core
+            self.cores_weights[core_name].auto_scale()
 
     def save_cores(self, file_path: Union[str, Path], metadata: Optional[Mapping[str, str]] = None):
         """Save all core tensors into a safetensors file."""
