@@ -21,8 +21,6 @@ if TYPE_CHECKING:
     from ...core.qctn import QCTN
     from ...backends.backend_interface import ComputeBackend
 
-from ...core.tn_tensor import TNTensor
-
 # debug
 local_debug = False
 
@@ -689,7 +687,7 @@ class DistributedEngineSiamese:
             core_name = entry.get('core_name', '')
             
             if core_name and core_name in qctn.cores_weights:
-                local_weights[core_name] = qctn.cores_weights[core_name]
+                local_weights[core_name] = qctn.cores_weights[core_name].tensor
                 local_cores_list.append(core_name)
             
             # Collect qubit indices from in_edge_list and out_edge_list
@@ -856,11 +854,18 @@ class DistributedEngineSiamese:
         local_print(f"[Rank {self.rank}] Local contraction: "
               f"input_qubits={input_qubit_indices}, output_qubits={output_qubit_indices}")
 
-        local_result = self._contract_local(local_circuit_states_list, local_measure_input_list, 
-                                            measure_is_matrix)
+        # local_result = self._contract_local(local_circuit_states_list, local_measure_input_list, 
+        #                                     measure_is_matrix)
+
+        local_result = self._base_engine.contract_with_compiled_strategy(
+            self._qctn,
+            circuit_states_list=circuit_states_list,
+            measure_input_list=measure_input_list,
+            measure_is_matrix=measure_is_matrix
+        )
         
         if self.world_size == 1:
-            print(f"[Rank {self.rank}] Single rank execution complete. Result shape: {local_result.shape}")
+            local_print(f"[Rank {self.rank}] Single rank execution complete. Result shape: {local_result.shape}")
             return local_result
         
         local_print(f"[Rank {self.rank}] Local contraction complete. Result shape: {local_result.shape}")
@@ -1596,20 +1601,16 @@ class DistributedEngineSiamese:
     
     def _exchange_tensor_with_partner(self, tensor: 'torch.Tensor', partner_rank: int) -> 'torch.Tensor':
         """
-        Exchange tensor with partner rank using gradient-aware point-to-point send/recv.
-        
-        Uses SendRecvGrad autograd function to maintain gradient flow through
-        the exchange operation during backpropagation.
+        Exchange tensor with partner rank using point-to-point send/recv.
         
         Args:
             tensor: Tensor to send
             partner_rank: Rank of partner
             
         Returns:
-            Tensor received from partner (with gradient support)
+            Tensor received from partner
         """
         import torch
-        from ..optim.allreduce_grad import SendRecvGrad
         
         # Step 1: Exchange shapes first so we know how to allocate receive buffer
         # Send our shape to partner, receive partner's shape
@@ -1645,14 +1646,17 @@ class DistributedEngineSiamese:
         
         partner_shape = tuple(partner_shape_tensor.tolist())
         
-        # Step 2: Allocate receive buffer and use gradient-aware send/recv
+        # Step 2: Allocate receive buffer and exchange data
         recv_buffer = torch.zeros(partner_shape, dtype=tensor.dtype, device=tensor.device)
         
-        # Use SendRecvGrad for gradient-aware exchange
-        # This allows gradients to flow back through the exchange during backpropagation
-        result = SendRecvGrad.apply(tensor.contiguous(), recv_buffer, partner_rank, self.rank)
+        if self.rank < partner_rank:
+            self.comm.send(tensor.contiguous(), partner_rank, tag=tag_data)
+            self.comm.recv(partner_rank, tag=tag_data, tensor=recv_buffer)
+        else:
+            self.comm.recv(partner_rank, tag=tag_data, tensor=recv_buffer)
+            self.comm.send(tensor.contiguous(), partner_rank, tag=tag_data)
         
-        return result
+        return recv_buffer
     
     # ==================== Backward Compatibility ====================
     
@@ -1734,101 +1738,129 @@ class DistributedEngineSiamese:
                 - grads: List of gradient tensors for local partition weights
         """
         import torch
+        import numpy as np
         from ...core.tn_tensor import TNTensor
         
-        # Ensure local weights require gradients
-        for name in self._local_qctn.cores:
-            weight = self._local_qctn.cores_weights[name]
-            if isinstance(weight, TNTensor):
-                weight.tensor.requires_grad_(True)
-                if weight.tensor.grad is not None:
-                    weight.tensor.grad.zero_()
-            elif isinstance(weight, torch.Tensor):
-                weight.requires_grad_(True)
-                if weight.grad is not None:
-                    weight.grad.zero_()
+        qctn = self._qctn
         
-        # Forward pass: distributed contraction
-        result = self.contract_distributed(
-            circuit_states_list=circuit_states_list,
-            measure_input_list=measure_input_list,
-            measure_is_matrix=measure_is_matrix
-        )
-
-        local_print(f"[Rank {self.rank}] Contraction result shape: {result.shape} result: {result}")
-        
-        # Debug: Check if result is connected to computation graph
-        local_print(f"[Rank {self.rank}] result.requires_grad: {result.requires_grad}")
-        local_print(f"[Rank {self.rank}] result.grad_fn: {result.grad_fn}")
-        
-        # Compute cross-entropy loss
-        loss = self._compute_cross_entropy_loss(result, target)
-        
-        # Debug: Check loss connection
-        local_print(f"[Rank {self.rank}] loss.requires_grad: {loss.requires_grad}")
-        local_print(f"[Rank {self.rank}] loss.grad_fn: {loss.grad_fn}")
-
+        # Prepare tensors for gradient calculation (same as engine_siamese)
+        # We need to separate tensors (which require grad) from scales (constants)
         raw_core_tensors = []
-        core_names = []
-        for name in self._local_qctn.cores:
-            weight = self._local_qctn.cores_weights[name]
-            if isinstance(weight, TNTensor):
-                raw_core_tensors.append(weight.tensor)
-            else:
-                raw_core_tensors.append(weight)
-            core_names.append(name)
+        core_scales = []
+        core_names = list(qctn.cores)
         
-        grad_tensors = [x for x in raw_core_tensors]
-
-        # Debug: print requires_grad status and grad_fn
-        for i, (name, tensor) in enumerate(zip(core_names, grad_tensors)):
-            local_print(f"[Rank {self.rank}] Input tensor {name}: requires_grad={tensor.requires_grad}, "
-                  f"is_leaf={tensor.is_leaf}, grad_fn={tensor.grad_fn}, shape={tensor.shape}")
-
-        gradients = self.backend.torch.autograd.grad(
-            outputs=loss,
-            inputs=grad_tensors,
-            create_graph=False,
-            retain_graph=False,
-            allow_unused=False
-        )
-        
-        # Debug: check which gradients are None (unused)
-        for i, (name, grad) in enumerate(zip(core_names, gradients)):
-            if grad is None:
-                local_print(f"[Rank {self.rank}] WARNING: Gradient for {name} is None (tensor not used in graph)")
+        for c_name in core_names:
+            c = qctn.cores_weights[c_name]
+            if isinstance(c, TNTensor):
+                raw_core_tensors.append(c.tensor)
+                core_scales.append(c.scale)
             else:
-                local_print(f"[Rank {self.rank}] Gradient for {name}: shape={grad.shape}, norm={grad.norm().item():.6f}")
+                raw_core_tensors.append(c)
+                core_scales.append(1.0)
         
-        # Replace None gradients with zeros to avoid errors downstream
-        grads = []
-        for i, grad in enumerate(gradients):
-            if grad is None:
-                grads.append(torch.zeros_like(grad_tensors[i]))
+        # Get shapes info for strategy compilation
+        circuit_states = circuit_states_list
+        if isinstance(circuit_states_list, list):
+            states_shape = tuple([s.shape if s is not None else () for s in circuit_states_list])
+        elif isinstance(circuit_states_list, dict):
+            states_shape = tuple([circuit_states_list[i].shape if circuit_states_list[i] is not None else () 
+                                  for i in sorted(circuit_states_list.keys())])
+        
+        if isinstance(measure_input_list, list):
+            if isinstance(measure_input_list[0], TNTensor):
+                measure_shape = tuple([m.tensor.shape if m is not None else () for m in measure_input_list])
             else:
-                grads.append(grad.contiguous())
-
-        # Collect gradients from local partition weights
-        # grads = []
-        # for name in self._local_qctn.cores:
-        #     weight = self._local_qctn.cores_weights[name]
-        #     if isinstance(weight, TNTensor):
-        #         tensor = weight.tensor
-        #     else:
-        #         tensor = weight
+                measure_shape = tuple([m.shape if m is not None else () for m in measure_input_list])
+        elif isinstance(measure_input_list, dict):
+            first_key = next(iter(measure_input_list))
+            if isinstance(measure_input_list[first_key], TNTensor):
+                measure_shape = tuple([measure_input_list[i].tensor.shape if measure_input_list[i] is not None else () 
+                                      for i in sorted(measure_input_list.keys())])
+            else:
+                measure_shape = tuple([measure_input_list[i].shape if measure_input_list[i] is not None else () 
+                                      for i in sorted(measure_input_list.keys())])
+        measure_input = measure_input_list
+        
+        shapes_info = {
+            'circuit_states_shapes': states_shape,
+            'measure_shapes': measure_shape,
+            'measure_is_matrix': measure_is_matrix
+        }
+        
+        # Get or compile strategy (same as engine_siamese)
+        cache_key = f'_compiled_strategy_{self._base_engine.strategy_mode}_{states_shape}_{measure_shape}_{measure_is_matrix}'
+        
+        if not hasattr(qctn, cache_key):
+            # Compile strategy
+            compute_fn, strategy_name, cost = self._base_engine.strategy_compiler.compile(
+                qctn, shapes_info, self.backend
+            )
+            # Cache the result
+            setattr(qctn, cache_key, {
+                'compute_fn': compute_fn,
+                'strategy_name': strategy_name,
+                'cost': cost
+            })
+            local_print(f"[DistributedEngine] Compiled and cached strategy: {strategy_name}")
+        else:
+            cached = getattr(qctn, cache_key)
+            compute_fn = cached['compute_fn']
+        
+        # Define loss function (same pattern as engine_siamese)
+        def loss_fn(*core_tensors_args):
+            # Reconstruct cores_dict with TNTensors or raw tensors
+            reconstructed_cores_dict = {}
             
-        #     if hasattr(tensor, 'grad') and tensor.grad is not None:
-        #         grads.append(tensor.grad.clone())
-        #     else:
-        #         grads.append(torch.zeros_like(tensor))
+            for i, name in enumerate(core_names):
+                tensor = core_tensors_args[i]
+                scale = core_scales[i]
+                
+                if isinstance(qctn.cores_weights[name], TNTensor):
+                    reconstructed_cores_dict[name] = TNTensor(tensor, scale)
+                else:
+                    reconstructed_cores_dict[name] = tensor
+            
+            # Execute contraction
+            result = compute_fn(reconstructed_cores_dict, circuit_states, measure_input)
+            
+            # Result might be TNTensor or raw tensor
+            if isinstance(result, TNTensor):
+                res_tensor = result.tensor
+                res_scale = result.scale
+            else:
+                res_tensor = result
+                res_scale = 1.0
+            
+            # Compute Cross Entropy loss (same as engine_siamese)
+            # Target is all ones (maximizing probability)
+            res_tensor = torch.clamp(res_tensor, min=1e-10)
+            log_result = torch.log(res_tensor)
+            
+            # Note: log(scale) is constant w.r.t parameters, so gradients are correct
+            # We don't add it to keep gradient computation identical to engine_siamese
+            log_total = log_result
+            
+            if target is not None:
+                return -torch.mean(target * log_total)
+            else:
+                return -torch.mean(log_total)
         
-        # return loss.detach(), grads
-
-        # print(f"[Rank {self.rank}] core_weights names: {[(name, qctn.cores_weights[name].tensor.mean() if isinstance(qctn.cores_weights[name], TNTensor) else qctn.cores_weights[name].mean()) for name in core_names]}")
+        # Compute gradients using the same approach as engine_siamese
+        argnums = list(range(len(raw_core_tensors)))
+        
+        # Create value_and_grad function
+        value_and_grad_fn = self.backend.compute_value_and_grad(loss_fn, argnums=argnums)
+        
+        # Execute
+        loss, grads = value_and_grad_fn(*raw_core_tensors)
+        
+        grads = list(grads)
+        grads = [grad.contiguous() for grad in grads]
+        
+        print(f"[Rank {self.rank}] core_weights names: {[(name, qctn.cores_weights[name].tensor.mean() if isinstance(qctn.cores_weights[name], TNTensor) else qctn.cores_weights[name].mean()) for name in core_names]}")
         print(f"[Rank {self.rank}] Loss: {loss.item()}, Collected {[grad.mean().item() for grad in grads]} gradients.")
-        # print(f"[Rank {self.rank}] measure_input_list mean: {[m.mean().item() for m in measure_input_list]}")
+        print(f"[Rank {self.rank}] measure_input_list mean: {[m.mean().item() for m in measure_input_list]}")
         
-
         return loss, grads
     
     def _compute_cross_entropy_loss(self, result: 'torch.Tensor', 

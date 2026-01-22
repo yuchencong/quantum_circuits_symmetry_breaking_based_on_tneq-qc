@@ -90,7 +90,7 @@ class DistributedSGDG:
             # CRITICAL: Detach the updated tensor from the computation graph
             # This prevents "backward through the graph a second time" error
             # when training multiple iterations
-            updated_tensor = updated_tensor.detach().requires_grad_(True)
+            # updated_tensor = updated_tensor.detach().requires_grad_(True)
             
             # Update the weight
             if isinstance(param, TNTensor):
@@ -116,27 +116,31 @@ class DistributedSGDG:
         original_shape = param.shape
         
         # Reshape to matrix form [rows, cols] for Stiefel optimization
-        # For 4D tensor [n_in, n_out, rank_in, rank_out], reshape to [n_in*n_out, rank_in*rank_out]
-        if param.dim() == 4:
-            p_reshaped = param.view(param.size(0) * param.size(1), -1)
-            g_reshaped = grad.view(grad.size(0) * grad.size(1), -1)
-        elif param.dim() == 2:
+        # For tensors with more than 2 dimensions, reshape to matrix
+        if len(original_shape) > 2:
+            # Reshape similar to backend_pytorch: flatten first half dimensions
+            flat_dim = 1
+            for i in range(len(original_shape) // 2):
+                flat_dim *= original_shape[i]
+            p_reshaped = param.reshape(flat_dim, -1)
+            g_reshaped = grad.reshape(flat_dim, -1)
+        elif len(original_shape) == 2:
             p_reshaped = param
             g_reshaped = grad
         else:
-            # Fall back to standard SGD for other dimensions
+            # Fall back to standard SGD for 1D or scalar
             return param - self.lr * grad
         
-        # Unit normalization (project to Stiefel manifold)
-        unity = self._unit(p_reshaped)
+        # Normalize to get orthogonal matrix (same as backend_pytorch._unit)
+        unity, unity_norm = self._unit(p_reshaped)
         
         # Check Stiefel condition: rows <= cols
         if unity.size(0) > unity.size(1):
             # Cannot satisfy Stiefel constraint, fall back to SGD
             return param - self.lr * grad
         
-        # Periodic QR retraction for numerical stability
-        if random.random() < self.qr_retraction_prob:
+        # Periodic QR retraction for numerical stability (1% chance, same as backend_pytorch)
+        if random.randint(1, 101) == 1:
             unity = self._qr_retraction(unity)
         
         # Initialize or retrieve momentum buffer
@@ -148,6 +152,8 @@ class DistributedSGDG:
             )
         
         V = self.momentum_buffer[name]
+        
+        # Update momentum: V = momentum * V - g^T
         V = self.momentum * V - g_reshaped.t()
         
         # Compute skew-symmetric matrix W
@@ -158,7 +164,8 @@ class DistributedSGDG:
         W = W_hat - W_hat.t()  # Ensure skew-symmetry
         
         # Adaptive step size based on matrix norm
-        t = 0.5 * 2 / (self._matrix_norm_one(W) + self.epsilon)
+        W_norm = self._matrix_norm_one(W)
+        t = 0.5 * 2 / (W_norm + self.epsilon)
         alpha = min(t, self.lr)
         
         # Cayley transform: Y = (I - alpha/2 * W)^(-1) @ (I + alpha/2 * W) @ X
@@ -168,33 +175,40 @@ class DistributedSGDG:
         V_new = torch.mm(W, unity.t())
         self.momentum_buffer[name] = V_new
         
-        return p_new.view(original_shape)
+        return p_new.reshape(original_shape)
     
-    def _unit(self, W: torch.Tensor) -> torch.Tensor:
+    def _unit(self, v: torch.Tensor, dim: int = 1, eps: float = 1e-8):
         """
-        Project matrix to have orthonormal rows using QR decomposition.
+        Normalize a matrix to have unit norm (same as backend_pytorch._unit).
         
         Args:
-            W: Input matrix [rows, cols]
+            v: Input matrix [rows, cols]
+            dim: Dimension to normalize along
+            eps: Small constant for numerical stability
             
         Returns:
-            Matrix with orthonormal rows
+            Tuple of (normalized matrix, norm values)
         """
-        Q, R = torch.linalg.qr(W.t())
-        return Q.t()
+        vnorm = torch.norm(v, p=2, dim=dim, keepdim=True)
+        return v / (vnorm + eps), vnorm
     
-    def _qr_retraction(self, X: torch.Tensor) -> torch.Tensor:
+    def _qr_retraction(self, tan_vec: torch.Tensor) -> torch.Tensor:
         """
-        QR retraction to ensure we stay on Stiefel manifold.
+        QR retraction to project back onto Stiefel manifold.
+        (Same implementation as backend_pytorch._qr_retraction)
         
         Args:
-            X: Matrix to retract [rows, cols]
+            tan_vec: Matrix to retract [rows, cols]
             
         Returns:
             Retracted matrix on Stiefel manifold
         """
-        Q, R = torch.linalg.qr(X.t())
-        return Q.t()
+        tan_vec_T = tan_vec.t()
+        q, r = torch.linalg.qr(tan_vec_T, mode='reduced')
+        d = torch.diag(r)
+        ph = torch.sign(d)
+        q = q * ph.unsqueeze(0)
+        return q.t()
     
     def _compute_Y(self, alpha: float, W: torch.Tensor, X: torch.Tensor) -> torch.Tensor:
         """

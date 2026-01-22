@@ -524,8 +524,9 @@ class QCTN:
             full_shape = input_shape + output_shape
             core = self.backend.reshape(core, full_shape)
 
-            self.cores_weights[core_name] = TNTensor(core)
-            self.cores_weights[core_name].auto_scale()
+            # self.cores_weights[core_name] = TNTensor(core)
+            self.cores_weights[core_name] = core
+            # self.cores_weights[core_name].auto_scale()
 
     def save_cores(self, file_path: Union[str, Path], metadata: Optional[Mapping[str, str]] = None):
         """Save all core tensors into a safetensors file."""

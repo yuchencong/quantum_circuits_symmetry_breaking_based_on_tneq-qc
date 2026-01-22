@@ -40,18 +40,18 @@ if __name__ == "__main__":
 
     engine = EngineSiamese(backend=backend, strategy_mode="balanced", mx_K=100)
 
-    suffix = "_exp11"
-    qctn_graph = QCTNHelper.generate_example_graph(n=17)
+    suffix = "_exp01"
+    qctn_graph = QCTNHelper.generate_example_graph(n=3)
     # print(f"qctn_graph: \n{qctn_graph}")
     # exit()
     qctn = QCTN(qctn_graph, backend=engine.backend)
 
-    N = 100
-    B = 1024
+    N = 1
+    B = 1
     # B = 1
     D = qctn.nqubits
     K = 3
-    num_step = 300
+    num_step = 1000
 
     data_list = []
     
@@ -60,8 +60,8 @@ if __name__ == "__main__":
     for i in range(N):
         x = torch.empty((B, D), device=device).normal_(mean=0.0, std=1.0)
 
-        Mx_list, out = engine.generate_data(x, K=K, ret_type='TNTensor')
-        # Mx_list, out = engine.generate_data(x, K=K)
+        # Mx_list, out = engine.generate_data(x, K=K, ret_type='TNTensor')
+        Mx_list, out = engine.generate_data(x, K=K)
 
         data_list += [({"measure_input_list": Mx_list}, out)]
 
@@ -180,7 +180,7 @@ if __name__ == "__main__":
         # tol=1e-6, 
         tol=0.0, 
         # learning_rate=1e-2, 
-        learning_rate=1e-3, 
+        learning_rate=1e-2, 
         beta1=0.9, 
         beta2=0.95, 
         epsilon=1e-8,

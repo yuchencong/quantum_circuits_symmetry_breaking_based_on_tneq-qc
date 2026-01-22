@@ -242,9 +242,12 @@ class EngineSiamese:
         # Execute
         result = compute_fn(cores_dict, circuit_states, measure_input)
         
-        result.scale_to(1.0)
+        if isinstance(result, TNTensor):
+            # result.scale_to(1.0)
 
-        return result.tensor
+            return result.tensor
+        else:
+            return result
 
     def contract_with_compiled_strategy_for_gradient(self, qctn, circuit_states_list, measure_input_list, measure_is_matrix=True) -> Tuple:
         """
@@ -383,7 +386,9 @@ class EngineSiamese:
 
             # print('log_scale', log_scale)
 
-            log_total = log_result + log_scale
+            # log_total = log_result + log_scale
+
+            log_total = log_result
             
             return -self.backend.mean(target * log_total)
         
@@ -403,6 +408,10 @@ class EngineSiamese:
         # tmp = {i: (grads[i], core_scales[i]) for i in range(len(grads))}
         # print(f"grads : {tmp}")
         # print(f"scale : {{i: core_scales[i] for i in range(len(core_scales))}}")
+
+        # print(f"core_weights names: {[(name, qctn.cores_weights[name].tensor.mean() if isinstance(qctn.cores_weights[name], TNTensor) else qctn.cores_weights[name].mean()) for name in qctn.cores]}")
+        print(f"Loss: {loss.item()}, Collected {[grad.mean().item() for grad in grads]} gradients.")
+        # print(f"measure_input_list mean: {[m.mean().item() for m in measure_input_list]}")
 
         return loss, grads
         
@@ -675,7 +684,7 @@ class EngineSiamese:
 
             # Step D: Contract
             # print(f"[EngineSiamese.sample] Step {q_idx}: Contraction (Batch={num_samples*grid_size})")
-
+    
             print(f"[EngineSiamese.sample] Sampling qubit {q_idx+1}/{qctn.nqubits}...")
             print(f"  Contracting with batch size: {num_samples * grid_size}...")
             print(f". Temp input list shape: {[x.shape for x in temp_input_list]}")
