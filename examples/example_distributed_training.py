@@ -77,10 +77,13 @@ def main():
         print(f"Backend: PyTorch CPU (gloo)")
         print()
     
+    # graph_type = "tree"
+    graph_type = "wall"
+
     # graph = QCTNHelper.generate_example_graph(n=2)
     # graph = QCTNHelper.generate_example_graph(n=3)
     # graph = QCTNHelper.generate_example_graph(n=5)
-    graph = QCTNHelper.generate_example_graph(n=17, dim_char='3')
+    graph = QCTNHelper.generate_example_graph(n=17, graph_type=graph_type, dim_char='3')
     # graph = QCTNHelper.generate_example_graph(n=17, dim_char='16')
     # graph = generate_2qubits_graph(n=16)
     print(f"[Rank {rank}] QCTN graph:\n{graph}")
@@ -287,7 +290,7 @@ def main():
     # Save trained weights from all processes to a single file
     # save_path = "assets/qctn_cores_5qubits_dist.safetensors"
     # save_path = "assets/qctn_cores_17qubits_dist_00.safetensors"
-    save_path = f"assets/qctn_cores_{num_qubits}qubits_dist_00.safetensors"
+    save_path = f"assets/qctn_cores_{num_qubits}qubits{graph_type}_dist_00.safetensors"
     trainer.engine.save_cores_distributed(
         file_path=save_path,
         metadata={

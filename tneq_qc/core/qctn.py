@@ -30,7 +30,7 @@ class QCTNHelper:
             yield symbol
 
     @staticmethod
-    def generate_example_graph(n=16, target=False, dim_char=None):
+    def generate_example_graph(n=16, target=False, graph_type="any", dim_char=None):
         """Generate an example quantum circuit graph."""
         if target:
             return  "-2-A-5-----C-3-----E-2-\n" \
@@ -68,7 +68,228 @@ class QCTNHelper:
                     graph += line + "\n"
                 return graph
             
-            return generate_std_graph(n, dim_char)
+            def generate_tree_graph(n, dim_char='3'):
+                "graph like a tree structure"
+                """
+                -3-------A-3-
+                -3---B-3-A-3-
+                -3---B-3-C-3-
+                -3-------C-3-
+
+                -3---------A-3-
+                -3-----B-3-A-3-
+                -3-C-3-B-----3-
+                -3-C-3-D-----3-
+                -3-----D-3-E-3-
+                -3---------E-3-
+                """
+                graph = ""
+                import opt_einsum
+                char_list = [opt_einsum.get_symbol(i) for i in range(n)]
+
+                if dim_char is None:
+                    dim_char = '3'
+                
+                m = n // 2
+
+                left = (m - 1) * 4
+                right = 0
+                for i in range(m):
+                    if i == 0:
+                        line = "-" * left
+                        line += char_list[i]
+
+                        left -= 4
+                    else:
+                        line = "-" * left
+                        line += char_list[i] + f"-{dim_char}-" + char_list[i - 1]
+                        line += '-' * right
+
+                        left -= 4
+                        right += 4
+
+                    graph += '-' + dim_char + '-' + line + '-' + dim_char + '-' + "\n"
+                
+                if n % 2 == 1:
+                    line = char_list[m - 1] + '-' * ((m - 1) * 4)
+
+                    graph += '-' + dim_char + '-' + line + '-' + dim_char + '-' + "\n"
+
+                left = 0
+                right = (m - 2) * 4
+                for i in range(m, m * 2):
+                    if i < m * 2 - 1:
+                        line = "-" * left
+                        line += char_list[i - 1] + f"-{dim_char}-" + char_list[i]
+                        line += '-' * right
+
+                        left += 4
+                        right -= 4
+                    else:
+                        line = "-" * left
+                        line += char_list[i - 1]
+                    graph += '-' + dim_char + '-' + line + '-' + dim_char + '-' + "\n"
+                
+                return graph
+            
+            def generate_wall_graph_col(n, L, dim_char='3'):
+                """
+                Generate a brick wall structure graph.
+                n: number of qubits (rows)
+                L: number of layers/columns
+                dim_char: dimension character for physical indices
+                
+                Brick wall structure: alternating layers of two-qubit gates
+                - Even layers (0, 2, 4, ...): gates on pairs (0,1), (2,3), (4,5), ...
+                - Odd layers (1, 3, 5, ...): gates on pairs (1,2), (3,4), (5,6), ...
+                
+                Example with n=4, L=4:
+                -3-A---3---B-----3-
+                -3-A-3-C-3-B-3-D-3-
+                -3-E-3-C-3-F-3-D-3-
+                -3-E---3---F-----3-
+                
+                char indices are assigned in row-major order (by row, then by layer)
+                """
+
+                graph = ""
+                import opt_einsum
+                
+                if dim_char is None:
+                    dim_char = '3'
+                
+                # Calculate total number of chars needed
+                # Each layer has floor(n/2) or ceil(n/2) interactions depending on parity
+                total_chars = L * (n // 2)
+                char_list = [opt_einsum.get_symbol(i) for i in range(total_chars)]
+                
+                # Create a 2D array to store which char connects which qubits
+                # char_map[layer][pair_index] = char_symbol
+                char_map = {}
+                char_idx = 0
+                
+                for layer in range(L):
+                    char_map[layer] = {}
+                    if layer % 2 == 0:
+                        # Even layer: pairs (0,1), (2,3), (4,5), ...
+                        for pair_idx in range(n // 2):
+                            char_map[layer][pair_idx] = char_list[char_idx]
+                            char_idx += 1
+                    else:
+                        # Odd layer: pairs (1,2), (3,4), (5,6), ...
+                        for pair_idx in range((n - 1) // 2):
+                            char_map[layer][pair_idx] = char_list[char_idx]
+                            char_idx += 1
+                
+                # Generate the graph string
+                for row in range(n):
+                    line = f"-{dim_char}-"
+                    
+                    for layer in range(L):
+                        if layer % 2 == 0:
+                            # Even layer: pairs (0,1), (2,3), (4,5), ...
+                            pair_idx = row // 2
+                            if row % 2 == 0 and pair_idx < n // 2:
+                                # First qubit in pair
+                                line += char_map[layer][pair_idx]
+                                line += f"-{dim_char}-"
+                            elif row % 2 == 1 and pair_idx < n // 2:
+                                # Second qubit in pair
+                                line += char_map[layer][pair_idx]
+                                line += f"-{dim_char}-"
+                            else:
+                                # No gate for this qubit in this layer
+                                line += f"---{dim_char}---"
+                        else:
+                            # Odd layer: pairs (1,2), (3,4), (5,6), ...
+                            if row == 0:
+                                # First qubit has no gate in odd layers
+                                line += f"---{dim_char}---"
+                            elif row == n - 1:
+                                # Last qubit has no gate in odd layers (if n is even)
+                                line += f"---{dim_char}---"
+                            else:
+                                # Middle qubits
+                                pair_idx = (row - 1) // 2
+                                if row % 2 == 1 and pair_idx < (n - 1) // 2:
+                                    # First qubit in pair
+                                    line += char_map[layer][pair_idx]
+                                    line += f"-{dim_char}-"
+                                elif row % 2 == 0 and pair_idx < (n - 1) // 2:
+                                    # Second qubit in pair
+                                    line += char_map[layer][pair_idx]
+                                    line += f"-{dim_char}-"
+                                else:
+                                    # No gate
+                                    line += f"---{dim_char}---"
+                    
+                    line += f"-{dim_char}-"
+                    graph += line + "\n"
+                
+                return graph.rstrip()
+
+            def generate_wall_graph(n, L, dim_char='3'):
+                """
+                Example with n=4, L=4:
+                -3-A-3-----B-----3-
+                -3-A-3-C-3-B-3-D-3-
+                -3-E-3-C-3-F-3-D-3-
+                -3-E-3-----F-----3-
+
+                """
+
+                graph = ""
+                import opt_einsum
+                
+                if dim_char is None:
+                    dim_char = '3'
+                
+                # Calculate total number of chars needed
+                # Each layer has floor(n/2) or ceil(n/2) interactions depending on parity
+                total_chars = L * (n // 2)
+                char_list = [opt_einsum.get_symbol(i) for i in range(total_chars)]
+                
+                line_list = [['-' for i in range(4 * L)] for j in range(n)]
+
+                for i in range(n):
+                    line_list[i][-2] = dim_char
+
+                idx = 0
+
+                m = L // 2
+                for i in range(n - 1):
+                    for j in range(m):
+                        offset = 0 if i % 2 == 0 else 4
+
+                        line_list[i][offset + 8 * j] = char_list[idx]
+                        line_list[i+1][offset + 8 * j] = char_list[idx]
+                        if j < m - 1 or (j == m - 1 and i > 0):
+                            line_list[i][offset + 8 * j + 2] = dim_char
+                        if j < m - 1 or (j == m - 1 and i != n - 2):
+                            line_list[i+1][offset + 8 * j + 2] = dim_char
+                        
+                        idx += 1
+                
+                for i in range(n):
+                    graph += "-" + dim_char + "-" + ''.join(line_list[i]) + "\n"
+
+
+                return graph.rstrip()
+
+
+
+
+
+
+            if graph_type == "std":
+                return generate_std_graph(n, dim_char)
+            elif graph_type == "tree":
+                return generate_tree_graph(n, dim_char)
+            elif graph_type == "wall":
+                # For wall graph, we need to determine L (number of layers)
+                # Default to n layers if not specified
+                L = 4
+                return generate_wall_graph(n, L, dim_char)
         
             # return  "-3-A-3-"
             # return  "-3-A-3-B-3-C-3-D-3-"

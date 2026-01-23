@@ -41,9 +41,17 @@ if __name__ == "__main__":
     engine = EngineSiamese(backend=backend, strategy_mode="balanced", mx_K=100)
 
     suffix = "_exp01"
-    qctn_graph = QCTNHelper.generate_example_graph(n=17, dim_char='3')
-    # print(f"qctn_graph: \n{qctn_graph}")
-    # exit()
+    # graph_type = "tree"
+    graph_type = "wall"
+    # qctn_graph = QCTNHelper.generate_example_graph(n=17, dim_char='3')
+    # qctn_graph = QCTNHelper.generate_example_graph(n=17, graph_type="std", dim_char='3')
+    # print(f"std qctn_graph: \n{qctn_graph}")
+
+    # qctn_graph = QCTNHelper.generate_example_graph(n=17, graph_type=graph_type, dim_char='3')
+    qctn_graph = QCTNHelper.generate_example_graph(n=17, graph_type=graph_type, dim_char='3')
+    print(f"wall qctn_graph: \n{qctn_graph}")
+    
+
     qctn = QCTN(qctn_graph, backend=engine.backend)
 
     N = 100
@@ -208,8 +216,8 @@ if __name__ == "__main__":
     print(f"Optimization Time: {toc - tic:.2f} seconds")
 
     # save cores
-    cores_file = f"./assets/qctn_cores_{qctn.nqubits}qubits{suffix}.safetensors"
-    qctn.save_cores(cores_file, metadata={"graph": "example"})
+    cores_file = f"./assets/qctn_cores_{qctn.nqubits}qubits{graph_type}{suffix}.safetensors"
+    qctn.save_cores(cores_file, metadata={"graph": graph_type})
     
     print(f"Saved trained QCTN cores to {cores_file}")
 

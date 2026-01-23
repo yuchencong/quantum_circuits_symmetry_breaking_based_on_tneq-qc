@@ -210,7 +210,10 @@ def test_heatmap_marginal(qctn_cores_file="./assets/qctn_cores_3qubits_exp1.safe
         qubits_str = qctn_cores_file.split('qubits')[0].split('_')[-1]
         n_qubits = int(qubits_str)
 
-        qctn_graph = QCTNHelper.generate_example_graph(n=n_qubits)
+        graph_type_str = qctn_cores_file.split('qubits')[-1].split('_')[0]
+        if graph_type_str == '':
+            graph_type_str = 'std'
+        qctn_graph = QCTNHelper.generate_example_graph(n=n_qubits, graph_type=graph_type_str)
         qctn = QCTN.from_pretrained(qctn_graph, qctn_cores_file, backend=engine.backend)
         
     edge_size = 100
@@ -365,6 +368,28 @@ if __name__ == "__main__":
     # test_heatmap_marginal(qctn_cores_file="./assets/qctn_cores_5qubits_exp01.safetensors",
     #                       output_file = './assets/marginal_probability_heatmap_5qubits_exp01.png',
     #                       device='cpu')
+    
+    test_heatmap_marginal(qctn_cores_file="./assets/qctn_cores_16qubitstree_exp01.safetensors",
+                          output_file = './assets/marginal_probability_heatmap_16qubitstree_exp01.png',
+                          device='cpu')
+
+    test_heatmap_marginal(qctn_cores_file="./assets/qctn_cores_17qubitstree_exp01.safetensors",
+                          output_file = './assets/marginal_probability_heatmap_17qubitstree_exp01.png',
+                          device='cpu')
+
+    test_heatmap_marginal(qctn_cores_file="./assets/qctn_cores_17qubitswall_exp01.safetensors",
+                          output_file = './assets/marginal_probability_heatmap_17qubitswall_exp01.png',
+                          device='cpu')
+    
+    test_heatmap_marginal(qctn_cores_file="./assets/qctn_cores_17qubitstree_dist_00.safetensors",
+                          output_file = './assets/marginal_probability_heatmap_17qubitstree_dist_00.png',
+                          device='cpu')
+    
+    test_heatmap_marginal(qctn_cores_file="./assets/qctn_cores_17qubitswall_dist_00.safetensors",
+                          output_file = './assets/marginal_probability_heatmap_17qubitswall_dist_00.png',
+                          device='cpu')
+    exit()
+    
     test_heatmap_marginal(qctn_cores_file="./assets/qctn_cores_2qubits_exp01.safetensors",
                           output_file = './assets/marginal_probability_heatmap_2qubits_exp01.png',
                           device='cpu')
