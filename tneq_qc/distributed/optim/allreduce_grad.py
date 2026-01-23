@@ -21,20 +21,22 @@ class AllReduceGrad(torch.autograd.Function):
     """
     
     @staticmethod
-    def forward(ctx, tensor: torch.Tensor, op: TorchReduceOp = TorchReduceOp.SUM) -> torch.Tensor:
+    def forward(ctx, tensor: torch.Tensor, op: TorchReduceOp = TorchReduceOp.SUM, group=None) -> torch.Tensor:
         """
         AllReduce forward pass.
         
         Args:
             tensor: Input tensor to allreduce
             op: Reduce operation (SUM, AVG, etc.)
+            group: Process group (default: WORLD)
             
         Returns:
             Allreduced tensor
         """
         ctx.op = op
+        ctx.group = group
         result = tensor.clone()
-        dist.all_reduce(result, op=op)
+        dist.all_reduce(result, op=op, group=group)
         return result
     
     @staticmethod
@@ -49,16 +51,16 @@ class AllReduceGrad(torch.autograd.Function):
             grad_output: Gradient from upstream
             
         Returns:
-            Gradient to propagate downstream, None for op parameter
+            Gradient to propagate downstream, None for op and group parameters
         """
         # For SUM: each rank contributed to the sum, so gradient flows back equally
         # We allreduce the gradient so all ranks have the same gradient
         grad_input = grad_output.clone()
-        dist.all_reduce(grad_input, op=ctx.op)
-        return grad_input, None
+        dist.all_reduce(grad_input, op=ctx.op, group=ctx.group)
+        return grad_input, None, None
 
 
-def allreduce_with_grad(tensor: torch.Tensor, op: TorchReduceOp = TorchReduceOp.SUM) -> torch.Tensor:
+def allreduce_with_grad(tensor: torch.Tensor, op: TorchReduceOp = TorchReduceOp.SUM, group=None) -> torch.Tensor:
     """
     Perform allreduce with gradient support.
     
@@ -67,6 +69,7 @@ def allreduce_with_grad(tensor: torch.Tensor, op: TorchReduceOp = TorchReduceOp.
     Args:
         tensor: Input tensor to allreduce
         op: Reduce operation (default: SUM)
+        group: Process group (default: WORLD)
         
     Returns:
         Allreduced tensor (maintains gradient computation)

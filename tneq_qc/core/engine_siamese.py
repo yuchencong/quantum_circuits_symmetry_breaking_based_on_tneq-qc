@@ -168,7 +168,7 @@ class EngineSiamese:
 
             if ret_type == "TNTensor":
                 tmp = TNTensor(tmp)
-                tmp.auto_scale()
+                # tmp.auto_scale()
 
             Mx_list.append(tmp)
         
@@ -382,15 +382,15 @@ class EngineSiamese:
             #      else:
             #           log_scale = self.backend.log(detached_scale)
 
-            log_scale = np.log(res_scale)
+            # log_scale = np.log(res_scale)
             # log_scale = self.backend.log(self.backend.detach(res_scale))
-            # log_scale = self.backend.detach(res_log_scale)
+            log_scale = self.backend.detach(res_log_scale)
 
             # print('log_scale', log_scale)
 
-            # log_total = log_result + log_scale
+            log_total = log_result + log_scale
 
-            log_total = log_result
+            # log_total = log_result
             
             return -self.backend.mean(target * log_total)
         
@@ -412,7 +412,7 @@ class EngineSiamese:
         # print(f"scale : {{i: core_scales[i] for i in range(len(core_scales))}}")
 
         # print(f"core_weights names: {[(name, qctn.cores_weights[name].tensor.mean() if isinstance(qctn.cores_weights[name], TNTensor) else qctn.cores_weights[name].mean()) for name in qctn.cores]}")
-        print(f"Loss: {loss.item()}, Collected {[grad.mean().item() for grad in grads]} gradients.")
+        # print(f"Loss: {loss.item()}, Collected {[grad.mean().item() for grad in grads]} gradients.")
         # print(f"measure_input_list mean: {[m.mean().item() for m in measure_input_list]}")
 
         return loss, grads

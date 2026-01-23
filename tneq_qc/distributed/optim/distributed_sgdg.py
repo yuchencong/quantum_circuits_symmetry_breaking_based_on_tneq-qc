@@ -107,6 +107,9 @@ class DistributedSGDG:
             # when training multiple iterations
             # updated_tensor = updated_tensor.detach().requires_grad_(True)
             updated_tensor.requires_grad_(True)
+            if updated_tensor.grad is not None:
+                updated_tensor.grad.detach_()
+                updated_tensor.grad.zero_()
 
             # Update the weight
             if isinstance(param, TNTensor):

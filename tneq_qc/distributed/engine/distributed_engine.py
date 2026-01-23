@@ -859,10 +859,10 @@ class DistributedEngineSiamese:
         local_result = self._contract_local(local_circuit_states_list, local_measure_input_list, 
                                             measure_is_matrix, ret_type='TNTensor')
         
-        print(f"local_result {isinstance(local_result, TNTensor)}")
+        # print(f"local_result {isinstance(local_result, TNTensor)}")
 
         if self.world_size == 1:
-            print(f"[Rank {self.rank}] Single rank execution complete. Result shape: {local_result.shape}")
+            local_print(f"[Rank {self.rank}] Single rank execution complete. Result shape: {local_result.shape}")
             return local_result
         
         local_print(f"[Rank {self.rank}] Local contraction complete. Result shape: {local_result.shape}")
@@ -1061,6 +1061,15 @@ class DistributedEngineSiamese:
         local_print(f"[Rank {self.rank}] Stage {stage_idx}: left_partitions={sorted(left_partitions)}, "
               f"right_partitions={sorted(right_partitions)}, is_left_half={is_left_half}")
         
+        # Handle TNTensor input
+        is_tntensor = isinstance(local_tensor, TNTensor)
+        if is_tntensor:
+            my_log_scale = local_tensor.log_scale
+            local_tensor = local_tensor.tensor
+            local_print(f"[Rank {self.rank}] TNTensor input detected, log_scale={my_log_scale}")
+        else:
+            my_log_scale = 0.0
+            
         # Get all cross edges from contract plan
         all_cross_edges = self._contract_plan.inter_node_graph.get('cross_edges', [])
         
@@ -1315,6 +1324,37 @@ class DistributedEngineSiamese:
         partner_k_shard = self._exchange_tensor_with_partner(k_shard_to_partner, partner_rank)
         
         local_print(f"[Rank {self.rank}] Partner K shard received shape: {partner_k_shard.shape}")
+
+        # Exchange log scales with partner to maintain TNTensor precision
+        partner_log_scale = 0.0
+        if partner_rank >= 0:
+            my_log_scale_tensor = torch.tensor([my_log_scale], device=local_tensor.device, dtype=torch.float64)
+            partner_log_scale_tensor = torch.zeros(1, device=local_tensor.device, dtype=torch.float64)
+            
+            tag_log_scale = 103
+            if self.rank < partner_rank:
+                self.comm.send(my_log_scale_tensor, partner_rank, tag=tag_log_scale)
+                self.comm.recv(partner_rank, tag=tag_log_scale, tensor=partner_log_scale_tensor)
+            else:
+                self.comm.recv(partner_rank, tag=tag_log_scale, tensor=partner_log_scale_tensor)
+                self.comm.send(my_log_scale_tensor, partner_rank, tag=tag_log_scale)
+            partner_log_scale = partner_log_scale_tensor.item()
+            pair_log_scale = my_log_scale + partner_log_scale
+        else:
+            # If no partner, this rank contributes zeros, so log_scale can be effectively -inf
+            pair_log_scale = -1e10 
+            
+        # Synchronize pair_log_scale across the group to find the max log scale for allreduce safety
+        pair_log_scale_tensor = torch.tensor([pair_log_scale], device=local_tensor.device, dtype=torch.float64)
+        all_pair_log_scales_list = self.comm.allgather(pair_log_scale_tensor)
+        all_pair_log_scales = torch.stack(all_pair_log_scales_list, dim=0) # [world_size, 1]
+        
+        # Determine target log scale for this group's reduction (use max log scale across group)
+        group_pair_log_scales = all_pair_log_scales[group_ranks]
+        target_log_scale = group_pair_log_scales.max().item()
+        
+        # Scaling factor to align this rank's partial result with the target log scale
+        scaling_factor = math.exp(pair_log_scale - target_log_scale)
         
         # Perform partial matrix multiplication
         # Left: [B, N, K_shard] @ [B, K_shard, M] -> [B, N, M]
@@ -1331,15 +1371,17 @@ class DistributedEngineSiamese:
             my_T = my_k_shard.transpose(1, 2)  # [B, K_shard, M]
             partial_result = torch.bmm(partner_k_shard, my_T)  # [B, N, M]
         
-        local_print(f"[Rank {self.rank}] Partial result shape: {partial_result.shape}")
+        # Scale partial_result to match the target log scale
+        if scaling_factor != 1.0:
+            partial_result = partial_result * scaling_factor
+
+        local_print(f"[Rank {self.rank}] Partial result shape: {partial_result.shape}, scaled by {scaling_factor}")
         
         # AllReduce within group to sum up partial results
-        # Each node computed a partial [B, N, M] from its K shard
-        # Sum them up to get full [B, N, M]
-        # Use gradient-aware allreduce to support backpropagation
-        full_result = self._allreduce_with_grad(partial_result)
+        # Use gradient-aware allreduce with the specific group
+        full_result = self._allreduce_with_grad(partial_result, group_ranks=group_ranks)
         
-        local_print(f"[Rank {self.rank}] Full result after allreduce: {full_result.shape}")
+        local_print(f"[Rank {self.rank}] Full result after allreduce: {full_result.shape}, log_scale={target_log_scale}")
         
         # =====================================================================
         # Reshape back to multi-dimensional tensor where each dim = one edge
@@ -1500,7 +1542,11 @@ class DistributedEngineSiamese:
         local_print(f"[Rank {self.rank}] Final result shape after reorder: {result.shape}")
         local_print(f"[Rank {self.rank}] Result dim info (symmetric): {result_dim_info}")
         
-        return result
+        # If input was TNTensor, return the result as a TNTensor to maintain precision
+        if is_tntensor:
+            return TNTensor(result, log_scale=target_log_scale)
+        else:
+            return result
     
     def _gather_shards_in_subgroup(self, my_shard: 'torch.Tensor', sub_group_ranks: List[int]) -> List['torch.Tensor']:
         """
@@ -1625,7 +1671,36 @@ class DistributedEngineSiamese:
     
     # ==================== Gradient-Aware Operations ====================
     
-    def _allreduce_with_grad(self, tensor: 'torch.Tensor') -> 'torch.Tensor':
+    def _get_process_group(self, rank_list: List[int]):
+        """
+        Get or create a process group for the given ranks.
+        
+        Args:
+            rank_list: List of ranks in the group
+            
+        Returns:
+            Process group object for torch.distributed
+        """
+        import torch.distributed as dist
+        
+        if not hasattr(self, '_pg_cache'):
+            self._pg_cache = {}
+            
+        # Group list must be sorted for consistent key
+        ranks = tuple(sorted(rank_list))
+        
+        if ranks not in self._pg_cache:
+            if len(ranks) <= 1:
+                self._pg_cache[ranks] = None
+            elif len(ranks) == self.world_size:
+                self._pg_cache[ranks] = None # Use WORLD group
+            else:
+                local_print(f"[Rank {self.rank}] Creating new process group for ranks: {ranks}")
+                self._pg_cache[ranks] = dist.new_group(ranks)
+                
+        return self._pg_cache[ranks]
+
+    def _allreduce_with_grad(self, tensor: 'torch.Tensor', group_ranks: Optional[List[int]] = None) -> 'torch.Tensor':
         """
         Perform allreduce with gradient support.
         
@@ -1634,6 +1709,7 @@ class DistributedEngineSiamese:
         
         Args:
             tensor: Input tensor to allreduce
+            group_ranks: Optional list of ranks for local allreduce
             
         Returns:
             Allreduced tensor (gradients flow through)
@@ -1645,10 +1721,15 @@ class DistributedEngineSiamese:
         # If not using distributed or single process, return as-is
         if self.world_size == 1 or not dist.is_initialized():
             return tensor
+            
+        # Determine process group
+        pg = None
+        if group_ranks is not None:
+            pg = self._get_process_group(group_ranks)
         
         # Use gradient-aware allreduce
         from ..optim.allreduce_grad import allreduce_with_grad
-        return allreduce_with_grad(tensor, TorchReduceOp.SUM)
+        return allreduce_with_grad(tensor, TorchReduceOp.SUM, group=pg)
     
     def contract_distributed_with_gradient(self,
                                             circuit_states_list: List,
@@ -1786,11 +1867,10 @@ class DistributedEngineSiamese:
         
         if isinstance(result, TNTensor):
             res_tensor = result.tensor
-            res_scale = result.scale
+            res_log_scale = result.log_scale
         else:
             res_tensor = result
-            res_scale = 1.0
-
+            res_log_scale = 0.0
 
         if target is None:
             # Default: maximize all probabilities
@@ -1800,7 +1880,8 @@ class DistributedEngineSiamese:
         result_clamped = torch.clamp(res_tensor, min=1e-10)
         
         # Cross-entropy: -mean(target * log(result))
-        log_result = torch.log(result_clamped) + torch.log(torch.tensor(res_scale))
+        # Total log(value) = log(tensor) + log_scale
+        log_result = torch.log(result_clamped) + res_log_scale
         loss = -torch.mean(target * log_result)
         
         return loss
