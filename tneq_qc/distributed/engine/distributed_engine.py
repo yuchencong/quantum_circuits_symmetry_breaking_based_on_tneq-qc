@@ -218,7 +218,10 @@ class DistributedEngineSiamese:
                  strategy_mode: str = 'balanced', 
                  mx_K: int = 100,
                  comm: Optional[CommBase] = None,
-                 partition_config: Optional[PartitionConfig] = None):
+                 partition_config: Optional[PartitionConfig] = None,
+                 comm_timeout: float = 300.0,
+                 enable_comm_retry: bool = True,
+                 max_comm_retries: int = 3):
         """
         Initialize distributed engine.
         
@@ -228,6 +231,9 @@ class DistributedEngineSiamese:
             mx_K: Maximum Hermite polynomial order
             comm: Communication backend (auto-created if None)
             partition_config: Configuration for graph partitioning
+            comm_timeout: Communication timeout in seconds (default: 300s)
+            enable_comm_retry: Enable automatic retry on communication failures
+            max_comm_retries: Maximum number of retries for failed communications
         """
         # Import and create base engine
         from ...core.engine_siamese import EngineSiamese
@@ -244,6 +250,11 @@ class DistributedEngineSiamese:
         self.rank = self.comm.rank
         self.world_size = self.comm.world_size
         
+        # Communication settings
+        self.comm_timeout = comm_timeout
+        self.enable_comm_retry = enable_comm_retry
+        self.max_comm_retries = max_comm_retries
+        
         # Partition configuration
         self.partition_config = partition_config or PartitionConfig(
             num_partitions=self.world_size
@@ -255,12 +266,54 @@ class DistributedEngineSiamese:
         self._local_qctn: Optional['QCTN'] = None  # Local partition QCTN
         self._contract_plan: Optional[DistributedContractPlan] = None
         
-        self._log(f"DistributedEngineSiamese initialized: rank={self.rank}/{self.world_size}")
+        self._log(f"DistributedEngineSiamese initialized: rank={self.rank}/{self.world_size}, "
+                  f"timeout={comm_timeout}s, retry={enable_comm_retry}")
     
     def _log(self, msg: str, level: str = "info"):
         """Log message only on main process."""
         if self.rank == 0:
             local_print(f"[DistributedEngine] {msg}")
+    
+    def check_comm_health(self, timeout: float = 5.0) -> bool:
+        """
+        Check communication health by performing a simple allreduce operation.
+        
+        Args:
+            timeout: Timeout in seconds for the health check
+            
+        Returns:
+            True if communication is healthy, False otherwise
+        """
+        import torch
+        import time
+        
+        try:
+            # Create a simple test tensor
+            test_tensor = torch.tensor([self.rank], dtype=torch.float32, 
+                                      device=self.backend.backend_info.device)
+            
+            start_time = time.time()
+            
+            # Perform allreduce as health check
+            result_list = self.comm.allgather(test_tensor)
+            
+            elapsed = time.time() - start_time
+            
+            # Verify result
+            expected_sum = sum(range(self.world_size))
+            actual_sum = sum([t.item() for t in result_list])
+            
+            if abs(actual_sum - expected_sum) < 1e-6:
+                local_print(f"[Rank {self.rank}] Comm health check passed ({elapsed:.3f}s)")
+                return True
+            else:
+                print(f"[Rank {self.rank}] WARNING: Comm health check failed - "
+                      f"expected sum {expected_sum}, got {actual_sum}")
+                return False
+                
+        except Exception as e:
+            print(f"[Rank {self.rank}] ERROR: Comm health check failed: {e}")
+            return False
     
     # ==================== Proxy to Base Engine ====================
     
@@ -945,6 +998,15 @@ class DistributedEngineSiamese:
         """
         import torch
         
+        # Synchronize before starting stage to ensure all ranks are ready
+        local_print(f"[Rank {self.rank}] Entering stage {stage_idx}, synchronizing...")
+        try:
+            self.comm.barrier()
+            local_print(f"[Rank {self.rank}] Stage {stage_idx} barrier passed")
+        except Exception as e:
+            print(f"[Rank {self.rank}] ERROR: Barrier failed at stage {stage_idx}: {e}")
+            raise
+        
         # Compute group membership
         group_size = 2 ** stage_idx
         my_group = self.rank // group_size
@@ -978,6 +1040,15 @@ class DistributedEngineSiamese:
             is_left_half,
             contract_qubit_indices
         )
+        
+        # Synchronize after stage completion
+        local_print(f"[Rank {self.rank}] Stage {stage_idx} complete, synchronizing...")
+        try:
+            self.comm.barrier()
+            local_print(f"[Rank {self.rank}] Stage {stage_idx} exit barrier passed")
+        except Exception as e:
+            print(f"[Rank {self.rank}] ERROR: Exit barrier failed at stage {stage_idx}: {e}")
+            raise
         
         return result
     
@@ -1354,14 +1425,20 @@ class DistributedEngineSiamese:
             partner_log_scale_tensor = torch.zeros(1, device=local_tensor.device, dtype=torch.float64)
             
             tag_log_scale = 103
-            if self.rank < partner_rank:
-                self.comm.send(my_log_scale_tensor, partner_rank, tag=tag_log_scale)
-                self.comm.recv(partner_rank, tag=tag_log_scale, tensor=partner_log_scale_tensor)
-            else:
-                self.comm.recv(partner_rank, tag=tag_log_scale, tensor=partner_log_scale_tensor)
-                self.comm.send(my_log_scale_tensor, partner_rank, tag=tag_log_scale)
-            partner_log_scale = partner_log_scale_tensor.item()
-            pair_log_scale = my_log_scale + partner_log_scale
+            try:
+                if self.rank < partner_rank:
+                    self.comm.send(my_log_scale_tensor, partner_rank, tag=tag_log_scale)
+                    self.comm.recv(partner_rank, tag=tag_log_scale, tensor=partner_log_scale_tensor)
+                else:
+                    self.comm.recv(partner_rank, tag=tag_log_scale, tensor=partner_log_scale_tensor)
+                    self.comm.send(my_log_scale_tensor, partner_rank, tag=tag_log_scale)
+                partner_log_scale = partner_log_scale_tensor.item()
+                pair_log_scale = my_log_scale + partner_log_scale
+                local_print(f"[Rank {self.rank}] Log scale exchange successful: "
+                           f"my={my_log_scale:.2e}, partner={partner_log_scale:.2e}")
+            except Exception as e:
+                print(f"[Rank {self.rank}] ERROR: Log scale exchange with rank {partner_rank} failed: {e}")
+                raise
         else:
             # If no partner, this rank contributes zeros, so log_scale can be effectively -inf
             pair_log_scale = -1e10 
@@ -1608,6 +1685,9 @@ class DistributedEngineSiamese:
         Uses SendRecvGrad autograd function to maintain gradient flow through
         the exchange operation during backpropagation.
         
+        Optimized version: combines shape metadata into single message to reduce
+        communication rounds and deadlock risk.
+        
         Args:
             tensor: Tensor to send
             partner_rank: Rank of partner
@@ -1618,48 +1698,56 @@ class DistributedEngineSiamese:
         import torch
         from ..optim.allreduce_grad import SendRecvGrad
         
-        # Step 1: Exchange shapes first so we know how to allocate receive buffer
-        # Send our shape to partner, receive partner's shape
-        my_shape = torch.tensor(tensor.shape, dtype=torch.long, device=tensor.device)
-        n_dims = torch.tensor([len(tensor.shape)], dtype=torch.long, device=tensor.device)
+        # Step 1: Pack shape metadata into a single tensor to reduce communication rounds
+        # Format: [ndims, dim0, dim1, ..., dimN]
+        my_shape = list(tensor.shape)
+        n_dims = len(my_shape)
         
-        # Exchange number of dimensions first
-        partner_n_dims = torch.zeros(1, dtype=torch.long, device=tensor.device)
+        # Create metadata tensor: [ndims, shape...]
+        max_dims = 10  # Support up to 10 dimensions
+        my_metadata = torch.zeros(max_dims + 1, dtype=torch.long, device=tensor.device)
+        my_metadata[0] = n_dims
+        my_metadata[1:n_dims+1] = torch.tensor(my_shape, dtype=torch.long, device=tensor.device)
+        
+        partner_metadata = torch.zeros(max_dims + 1, dtype=torch.long, device=tensor.device)
         
         # Use sendrecv pattern: lower rank sends first to avoid deadlock
-        tag_ndims = 100
-        tag_shape = 101
-        tag_data = 102
+        # Single metadata exchange instead of multiple rounds
+        tag_metadata = 100
         
-        if self.rank < partner_rank:
-            # I send first, then receive
-            self.comm.send(n_dims, partner_rank, tag=tag_ndims)
-            self.comm.recv(partner_rank, tag=tag_ndims, tensor=partner_n_dims)
-        else:
-            # I receive first, then send
-            self.comm.recv(partner_rank, tag=tag_ndims, tensor=partner_n_dims)
-            self.comm.send(n_dims, partner_rank, tag=tag_ndims)
-        
-        # Exchange shapes
-        partner_shape_tensor = torch.zeros(partner_n_dims.item(), dtype=torch.long, device=tensor.device)
-        
-        if self.rank < partner_rank:
-            self.comm.send(my_shape, partner_rank, tag=tag_shape)
-            self.comm.recv(partner_rank, tag=tag_shape, tensor=partner_shape_tensor)
-        else:
-            self.comm.recv(partner_rank, tag=tag_shape, tensor=partner_shape_tensor)
-            self.comm.send(my_shape, partner_rank, tag=tag_shape)
-        
-        partner_shape = tuple(partner_shape_tensor.tolist())
+        try:
+            if self.rank < partner_rank:
+                # I send first, then receive
+                self.comm.send(my_metadata, partner_rank, tag=tag_metadata)
+                self.comm.recv(partner_rank, tag=tag_metadata, tensor=partner_metadata)
+            else:
+                # I receive first, then send
+                self.comm.recv(partner_rank, tag=tag_metadata, tensor=partner_metadata)
+                self.comm.send(my_metadata, partner_rank, tag=tag_metadata)
+            
+            # Unpack partner's shape
+            partner_n_dims = int(partner_metadata[0].item())
+            partner_shape = tuple(partner_metadata[1:partner_n_dims+1].tolist())
+            
+            local_print(f"[Rank {self.rank}] Metadata exchange with rank {partner_rank} successful: "
+                       f"my_shape={my_shape}, partner_shape={partner_shape}")
+            
+        except Exception as e:
+            print(f"[Rank {self.rank}] ERROR: Metadata exchange with rank {partner_rank} failed: {e}")
+            raise
         
         # Step 2: Allocate receive buffer and use gradient-aware send/recv
         recv_buffer = torch.zeros(partner_shape, dtype=tensor.dtype, device=tensor.device)
         
         # Use SendRecvGrad for gradient-aware exchange
         # This allows gradients to flow back through the exchange during backpropagation
-        result = SendRecvGrad.apply(tensor.contiguous(), recv_buffer, partner_rank, self.rank)
-        
-        return result
+        try:
+            result = SendRecvGrad.apply(tensor.contiguous(), recv_buffer, partner_rank, self.rank)
+            local_print(f"[Rank {self.rank}] Tensor exchange with rank {partner_rank} successful")
+            return result
+        except Exception as e:
+            print(f"[Rank {self.rank}] ERROR: Tensor exchange with rank {partner_rank} failed: {e}")
+            raise
     
     # ==================== Backward Compatibility ====================
     

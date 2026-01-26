@@ -127,7 +127,7 @@ class EinsumStrategy(ContractionStrategy):
         adjacency_matrix_for_interaction = adjacency_matrix.copy()
 
         from ..core.qctn import QCTNHelper
-        for element in QCTNHelper.jax_triu_ndindex(len(cores_name)):
+        for element in QCTNHelper.triu_ndindex(len(cores_name)):
             i, j = element
             if adjacency_matrix_for_interaction[i, j]:
                 connection_num = len(adjacency_matrix[i, j])
@@ -180,7 +180,7 @@ class EinsumStrategy(ContractionStrategy):
         adjacency_matrix_for_interaction = adjacency_matrix.copy()
 
         from ..core.qctn import QCTNHelper
-        for element in QCTNHelper.jax_triu_ndindex(len(cores_name)):
+        for element in QCTNHelper.triu_ndindex(len(cores_name)):
             i, j = element
             if adjacency_matrix_for_interaction[i, j]:
                 connection_num = len(adjacency_matrix[i, j])
@@ -234,7 +234,7 @@ class EinsumStrategy(ContractionStrategy):
         adjacency_matrix_for_interaction = adjacency_matrix.copy()
 
         from ..core.qctn import QCTNHelper
-        for element in QCTNHelper.jax_triu_ndindex(len(cores_name)):
+        for element in QCTNHelper.triu_ndindex(len(cores_name)):
             i, j = element
             if adjacency_matrix_for_interaction[i, j]:
                 connection_num = len(adjacency_matrix[i, j])
@@ -292,7 +292,7 @@ class EinsumStrategy(ContractionStrategy):
         adjacency_matrix_for_interaction = adjacency_matrix.copy()
 
         from ..core.qctn import QCTNHelper
-        for element in QCTNHelper.jax_triu_ndindex(len(cores_name)):
+        for element in QCTNHelper.triu_ndindex(len(cores_name)):
             i, j = element
             if adjacency_matrix_for_interaction[i, j]:
                 connection_num = len(adjacency_matrix[i, j])
@@ -302,7 +302,7 @@ class EinsumStrategy(ContractionStrategy):
                 adjacency_matrix[j, i] = connection_symbols
 
         target_adjacency_matrix_for_interaction = target_adjacency_matrix.copy()
-        for element in QCTNHelper.jax_triu_ndindex(len(target_cores_name)):
+        for element in QCTNHelper.triu_ndindex(len(target_cores_name)):
             i, j = element
             if target_adjacency_matrix_for_interaction[i, j]:
                 connection_num = len(target_adjacency_matrix[i, j])
@@ -380,7 +380,7 @@ class EinsumStrategy(ContractionStrategy):
         adjacency_matrix_for_interaction = adjacency_matrix.copy()
 
         from ..core.qctn import QCTNHelper
-        for element in QCTNHelper.jax_triu_ndindex(len(cores_name)):
+        for element in QCTNHelper.triu_ndindex(len(cores_name)):
             i, j = element
             if adjacency_matrix_for_interaction[i, j]:
                 connection_num = len(adjacency_matrix[i, j])
