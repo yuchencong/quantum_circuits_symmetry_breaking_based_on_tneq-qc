@@ -11,6 +11,8 @@ from typing import Tuple, List, Dict, Any, Callable
 
 from .base import ContractionStrategy
 
+from ..core.tn_tensor import TNTensor
+
 
 class EinsumStrategy(ContractionStrategy):
     """Strategy using opt_einsum directly (Fast mode)"""
@@ -81,10 +83,29 @@ class EinsumStrategy(ContractionStrategy):
                     tensors.extend(circuit_states)
                 else:
                     tensors.append(circuit_states)
-            
+
+            has_tntensor = False
+            _tensors = []
+            total_scale = None
+            for t in tensors:
+                if isinstance(t, TNTensor):
+                    _tensors.append(t.tensor)
+                    has_tntensor = True
+                    if total_scale is None:
+                        total_scale = t.scale
+                    else:
+                        total_scale *= t.scale
+                else:
+                    _tensors.append(t)
+
             # Execute expression
             jit_fn = backend.jit_compile(expr)
-            return backend.execute_expression(jit_fn, *tensors)
+            result = backend.execute_expression(jit_fn, *_tensors)
+
+            if has_tntensor and total_scale is not None:
+                result = TNTensor(result, scale=total_scale)
+
+            return result
         
         return compute_fn
     
@@ -98,9 +119,15 @@ class EinsumStrategy(ContractionStrategy):
             qctn, circuit_states_shapes, measure_shapes, measure_is_matrix
         )
         
+        print(f'einsum_eq for cost estimation: {einsum_eq}')
+        print(f'tensor_shapes for cost estimation: {tensor_shapes}')
+
+        # TODO: fix contract_path params
         # Estimate cost using opt_einsum
-        path_info = opt_einsum.contract_path(einsum_eq, *tensor_shapes, optimize='auto')
-        return float(path_info[1].opt_cost)
+        # path_info = opt_einsum.contract_path(einsum_eq, *tensor_shapes, optimize='auto')
+        # return float(path_info[1].opt_cost)
+
+        return 1.0
     
     @property
     def name(self) -> str:
@@ -117,45 +144,53 @@ class EinsumStrategy(ContractionStrategy):
         Returns:
             tuple: (einsum_equation, tensor_shapes)
         """
-        input_ranks, adjacency_matrix, output_ranks = qctn.circuit
         cores_name = qctn.cores
-
         symbol_id = 0
         einsum_equation_lefthand = ''
         einsum_equation_righthand = ''
-
-        adjacency_matrix_for_interaction = adjacency_matrix.copy()
-
-        from ..core.qctn import QCTNHelper
-        for element in QCTNHelper.triu_ndindex(len(cores_name)):
-            i, j = element
-            if adjacency_matrix_for_interaction[i, j]:
-                connection_num = len(adjacency_matrix[i, j])
-                connection_symbols = [opt_einsum.get_symbol(symbol_id + k) for k in range(connection_num)]
-                symbol_id += connection_num
-                adjacency_matrix[i, j] = connection_symbols
-                adjacency_matrix[j, i] = connection_symbols
-
-        for idx, _ in enumerate(cores_name):
-            for _ in input_ranks[idx]:
-                einsum_equation_lefthand += opt_einsum.get_symbol(symbol_id)
-                einsum_equation_righthand += opt_einsum.get_symbol(symbol_id)
-                symbol_id += 1
-
-            einsum_equation_lefthand += "".join(list(itertools.chain.from_iterable(adjacency_matrix[idx])))
-
-            for _ in output_ranks[idx]:
-                einsum_equation_lefthand += opt_einsum.get_symbol(symbol_id)
-                einsum_equation_righthand += opt_einsum.get_symbol(symbol_id)
-                symbol_id += 1
-
-            einsum_equation_lefthand += ','
-
+        
+        # Map edge connections to symbols
+        edge_symbol_map = {}  # (core1_idx, core2_idx, qubit_idx) -> symbol
+        
+        for core_info in qctn.adjacency_table:
+            core_idx = core_info['core_idx']
+            core_eq = ''
+            
+            # Add input edges
+            for edge in core_info['in_edge_list']:
+                if edge['neighbor_idx'] == -1:  # Circuit input
+                    symbol = opt_einsum.get_symbol(symbol_id)
+                    einsum_equation_righthand += symbol
+                    symbol_id += 1
+                else:  # Connection from another core
+                    key = tuple(sorted([edge['neighbor_idx'], core_idx])) + (edge['qubit_idx'],)
+                    if key not in edge_symbol_map:
+                        edge_symbol_map[key] = opt_einsum.get_symbol(symbol_id)
+                        symbol_id += 1
+                    symbol = edge_symbol_map[key]
+                core_eq += symbol
+            
+            # Add output edges
+            for edge in core_info['out_edge_list']:
+                if edge['neighbor_idx'] == -1:  # Circuit output
+                    symbol = opt_einsum.get_symbol(symbol_id)
+                    einsum_equation_righthand += symbol
+                    symbol_id += 1
+                else:  # Connection to another core
+                    key = tuple(sorted([core_idx, edge['neighbor_idx']])) + (edge['qubit_idx'],)
+                    if key not in edge_symbol_map:
+                        edge_symbol_map[key] = opt_einsum.get_symbol(symbol_id)
+                        symbol_id += 1
+                    symbol = edge_symbol_map[key]
+                core_eq += symbol
+            
+            einsum_equation_lefthand += core_eq + ','
+        
         einsum_equation_lefthand = einsum_equation_lefthand[:-1]
         einsum_equation = f'{einsum_equation_lefthand}->{einsum_equation_righthand}'
-
+        
         tensor_shapes = [qctn.cores_weights[core_name].shape for core_name in cores_name]
-
+        
         return einsum_equation, tensor_shapes
 
     @staticmethod
@@ -170,46 +205,54 @@ class EinsumStrategy(ContractionStrategy):
         Returns:
             tuple: (einsum_equation, tensor_shapes)
         """
-        input_ranks, adjacency_matrix, output_ranks = qctn.circuit
         cores_name = qctn.cores
-
         symbol_id = 0
         einsum_equation_lefthand = ''
         einsum_equation_righthand = ''
-
-        adjacency_matrix_for_interaction = adjacency_matrix.copy()
-
-        from ..core.qctn import QCTNHelper
-        for element in QCTNHelper.triu_ndindex(len(cores_name)):
-            i, j = element
-            if adjacency_matrix_for_interaction[i, j]:
-                connection_num = len(adjacency_matrix[i, j])
-                connection_symbols = [opt_einsum.get_symbol(symbol_id + k) for k in range(connection_num)]
-                symbol_id += connection_num
-                adjacency_matrix[i, j] = connection_symbols
-                adjacency_matrix[j, i] = connection_symbols
-
         inputs_equation_lefthand = ''
-        for idx, _ in enumerate(cores_name):
-            for _ in input_ranks[idx]:
-                einsum_equation_lefthand += opt_einsum.get_symbol(symbol_id)
-                inputs_equation_lefthand += opt_einsum.get_symbol(symbol_id)
-                symbol_id += 1
-
-            einsum_equation_lefthand += "".join(list(itertools.chain.from_iterable(adjacency_matrix[idx])))
-
-            for _ in output_ranks[idx]:
-                einsum_equation_lefthand += opt_einsum.get_symbol(symbol_id)
-                einsum_equation_righthand += opt_einsum.get_symbol(symbol_id)
-                symbol_id += 1
-
-            einsum_equation_lefthand += ','
-
+        
+        # Map edge connections to symbols
+        edge_symbol_map = {}  # (core1_idx, core2_idx, qubit_idx) -> symbol
+        
+        for core_info in qctn.adjacency_table:
+            core_idx = core_info['core_idx']
+            core_eq = ''
+            
+            # Add input edges
+            for edge in core_info['in_edge_list']:
+                if edge['neighbor_idx'] == -1:  # Circuit input
+                    symbol = opt_einsum.get_symbol(symbol_id)
+                    inputs_equation_lefthand += symbol
+                    symbol_id += 1
+                else:  # Connection from another core
+                    key = tuple(sorted([edge['neighbor_idx'], core_idx])) + (edge['qubit_idx'],)
+                    if key not in edge_symbol_map:
+                        edge_symbol_map[key] = opt_einsum.get_symbol(symbol_id)
+                        symbol_id += 1
+                    symbol = edge_symbol_map[key]
+                core_eq += symbol
+            
+            # Add output edges
+            for edge in core_info['out_edge_list']:
+                if edge['neighbor_idx'] == -1:  # Circuit output
+                    symbol = opt_einsum.get_symbol(symbol_id)
+                    einsum_equation_righthand += symbol
+                    symbol_id += 1
+                else:  # Connection to another core
+                    key = tuple(sorted([core_idx, edge['neighbor_idx']])) + (edge['qubit_idx'],)
+                    if key not in edge_symbol_map:
+                        edge_symbol_map[key] = opt_einsum.get_symbol(symbol_id)
+                        symbol_id += 1
+                    symbol = edge_symbol_map[key]
+                core_eq += symbol
+            
+            einsum_equation_lefthand += core_eq + ','
+        
         einsum_equation_lefthand = f'{inputs_equation_lefthand},{einsum_equation_lefthand[:-1]}'
         einsum_equation = f'{einsum_equation_lefthand}->{einsum_equation_righthand}'
-
+        
         tensor_shapes = [inputs_shape] + [qctn.cores_weights[core_name].shape for core_name in cores_name]
-
+        
         return einsum_equation, tensor_shapes
 
     @staticmethod
@@ -224,47 +267,54 @@ class EinsumStrategy(ContractionStrategy):
         Returns:
             tuple: (einsum_equation, tensor_shapes)
         """
-        input_ranks, adjacency_matrix, output_ranks = qctn.circuit
         cores_name = qctn.cores
-
         symbol_id = 0
         einsum_equation_lefthand = ''
         einsum_equation_righthand = ''
-
-        adjacency_matrix_for_interaction = adjacency_matrix.copy()
-
-        from ..core.qctn import QCTNHelper
-        for element in QCTNHelper.triu_ndindex(len(cores_name)):
-            i, j = element
-            if adjacency_matrix_for_interaction[i, j]:
-                connection_num = len(adjacency_matrix[i, j])
-                connection_symbols = [opt_einsum.get_symbol(symbol_id + k) for k in range(connection_num)]
-                symbol_id += connection_num
-                adjacency_matrix[i, j] = connection_symbols
-                adjacency_matrix[j, i] = connection_symbols
-
         inputs_equation_lefthand = ''
-        for idx, _ in enumerate(cores_name):
-            for _ in input_ranks[idx]:
-                einsum_equation_lefthand += opt_einsum.get_symbol(symbol_id)
-                inputs_equation_lefthand += opt_einsum.get_symbol(symbol_id)
-                inputs_equation_lefthand += ','
-                symbol_id += 1
-
-            einsum_equation_lefthand += "".join(list(itertools.chain.from_iterable(adjacency_matrix[idx])))
-
-            for _ in output_ranks[idx]:
-                einsum_equation_lefthand += opt_einsum.get_symbol(symbol_id)
-                einsum_equation_righthand += opt_einsum.get_symbol(symbol_id)
-                symbol_id += 1
-
-            einsum_equation_lefthand += ','
-
+        
+        # Map edge connections to symbols
+        edge_symbol_map = {}  # (core1_idx, core2_idx, qubit_idx) -> symbol
+        
+        for core_info in qctn.adjacency_table:
+            core_idx = core_info['core_idx']
+            core_eq = ''
+            
+            # Add input edges
+            for edge in core_info['in_edge_list']:
+                if edge['neighbor_idx'] == -1:  # Circuit input
+                    symbol = opt_einsum.get_symbol(symbol_id)
+                    inputs_equation_lefthand += symbol + ','
+                    symbol_id += 1
+                else:  # Connection from another core
+                    key = tuple(sorted([edge['neighbor_idx'], core_idx])) + (edge['qubit_idx'],)
+                    if key not in edge_symbol_map:
+                        edge_symbol_map[key] = opt_einsum.get_symbol(symbol_id)
+                        symbol_id += 1
+                    symbol = edge_symbol_map[key]
+                core_eq += symbol
+            
+            # Add output edges
+            for edge in core_info['out_edge_list']:
+                if edge['neighbor_idx'] == -1:  # Circuit output
+                    symbol = opt_einsum.get_symbol(symbol_id)
+                    einsum_equation_righthand += symbol
+                    symbol_id += 1
+                else:  # Connection to another core
+                    key = tuple(sorted([core_idx, edge['neighbor_idx']])) + (edge['qubit_idx'],)
+                    if key not in edge_symbol_map:
+                        edge_symbol_map[key] = opt_einsum.get_symbol(symbol_id)
+                        symbol_id += 1
+                    symbol = edge_symbol_map[key]
+                core_eq += symbol
+            
+            einsum_equation_lefthand += core_eq + ','
+        
         einsum_equation_lefthand = f'{inputs_equation_lefthand}{einsum_equation_lefthand[:-1]}'
         einsum_equation = f'{einsum_equation_lefthand}->{einsum_equation_righthand}'
-
+        
         tensor_shapes = inputs_shapes + [qctn.cores_weights[core_name].shape for core_name in cores_name]
-
+        
         return einsum_equation, tensor_shapes
 
     @staticmethod
@@ -279,74 +329,90 @@ class EinsumStrategy(ContractionStrategy):
         Returns:
             tuple: (einsum_equation, tensor_shapes)
         """
-        input_ranks, adjacency_matrix, output_ranks = qctn.circuit
         cores_name = qctn.cores
-
-        target_input_ranks, target_adjacency_matrix, target_output_ranks = target_qctn.circuit
         target_cores_name = target_qctn.cores
-
+        
         symbol_id = 0
         einsum_equation_lefthand = ''
         target_einsum_equation_lefthand = ''
-
-        adjacency_matrix_for_interaction = adjacency_matrix.copy()
-
-        from ..core.qctn import QCTNHelper
-        for element in QCTNHelper.triu_ndindex(len(cores_name)):
-            i, j = element
-            if adjacency_matrix_for_interaction[i, j]:
-                connection_num = len(adjacency_matrix[i, j])
-                connection_symbols = [opt_einsum.get_symbol(symbol_id + k) for k in range(connection_num)]
-                symbol_id += connection_num
-                adjacency_matrix[i, j] = connection_symbols
-                adjacency_matrix[j, i] = connection_symbols
-
-        target_adjacency_matrix_for_interaction = target_adjacency_matrix.copy()
-        for element in QCTNHelper.triu_ndindex(len(target_cores_name)):
-            i, j = element
-            if target_adjacency_matrix_for_interaction[i, j]:
-                connection_num = len(target_adjacency_matrix[i, j])
-                connection_symbols = [opt_einsum.get_symbol(symbol_id + k) for k in range(connection_num)]
-                symbol_id += connection_num
-                target_adjacency_matrix[i, j] = connection_symbols
-                target_adjacency_matrix[j, i] = connection_symbols
-
+        
+        # Map edge connections to symbols for qctn
+        edge_symbol_map = {}  # (core1_idx, core2_idx, qubit_idx) -> symbol
         input_symbols_stack = []
         output_symbols_stack = []
-
-        for idx, _ in enumerate(cores_name):
-            for _ in input_ranks[idx]:
-                symbol = opt_einsum.get_symbol(symbol_id)
-                einsum_equation_lefthand += symbol
-                input_symbols_stack.append(symbol)
-                symbol_id += 1
-
-            einsum_equation_lefthand += "".join(list(itertools.chain.from_iterable(adjacency_matrix[idx])))
-
-            for _ in output_ranks[idx]:
-                symbol = opt_einsum.get_symbol(symbol_id)
-                einsum_equation_lefthand += symbol
-                output_symbols_stack.append(symbol)
-                symbol_id += 1
-
-            einsum_equation_lefthand += ','
-
-        for idx, _ in enumerate(target_cores_name):
-            for _ in target_input_ranks[idx]:
-                target_einsum_equation_lefthand += input_symbols_stack.pop(0)
-
-            target_einsum_equation_lefthand += "".join(list(itertools.chain.from_iterable(target_adjacency_matrix[idx])))
-
-            for _ in target_output_ranks[idx]:
-                target_einsum_equation_lefthand += output_symbols_stack.pop(0)
-
-            target_einsum_equation_lefthand += ','
-
+        
+        for core_info in qctn.adjacency_table:
+            core_idx = core_info['core_idx']
+            core_eq = ''
+            
+            # Add input edges
+            for edge in core_info['in_edge_list']:
+                if edge['neighbor_idx'] == -1:  # Circuit input
+                    symbol = opt_einsum.get_symbol(symbol_id)
+                    input_symbols_stack.append(symbol)
+                    symbol_id += 1
+                else:  # Connection from another core
+                    key = tuple(sorted([edge['neighbor_idx'], core_idx])) + (edge['qubit_idx'],)
+                    if key not in edge_symbol_map:
+                        edge_symbol_map[key] = opt_einsum.get_symbol(symbol_id)
+                        symbol_id += 1
+                    symbol = edge_symbol_map[key]
+                core_eq += symbol
+            
+            # Add output edges
+            for edge in core_info['out_edge_list']:
+                if edge['neighbor_idx'] == -1:  # Circuit output
+                    symbol = opt_einsum.get_symbol(symbol_id)
+                    output_symbols_stack.append(symbol)
+                    symbol_id += 1
+                else:  # Connection to another core
+                    key = tuple(sorted([core_idx, edge['neighbor_idx']])) + (edge['qubit_idx'],)
+                    if key not in edge_symbol_map:
+                        edge_symbol_map[key] = opt_einsum.get_symbol(symbol_id)
+                        symbol_id += 1
+                    symbol = edge_symbol_map[key]
+                core_eq += symbol
+            
+            einsum_equation_lefthand += core_eq + ','
+        
+        # Map edge connections to symbols for target_qctn
+        target_edge_symbol_map = {}
+        
+        for core_info in target_qctn.adjacency_table:
+            core_idx = core_info['core_idx']
+            core_eq = ''
+            
+            # Add input edges - reuse symbols from output_symbols_stack
+            for edge in core_info['in_edge_list']:
+                if edge['neighbor_idx'] == -1:  # Circuit input (connects to qctn output)
+                    symbol = input_symbols_stack.pop(0)
+                else:  # Connection from another core
+                    key = tuple(sorted([edge['neighbor_idx'], core_idx])) + (edge['qubit_idx'],)
+                    if key not in target_edge_symbol_map:
+                        target_edge_symbol_map[key] = opt_einsum.get_symbol(symbol_id)
+                        symbol_id += 1
+                    symbol = target_edge_symbol_map[key]
+                core_eq += symbol
+            
+            # Add output edges - reuse symbols from output_symbols_stack
+            for edge in core_info['out_edge_list']:
+                if edge['neighbor_idx'] == -1:  # Circuit output
+                    symbol = output_symbols_stack.pop(0)
+                else:  # Connection to another core
+                    key = tuple(sorted([core_idx, edge['neighbor_idx']])) + (edge['qubit_idx'],)
+                    if key not in target_edge_symbol_map:
+                        target_edge_symbol_map[key] = opt_einsum.get_symbol(symbol_id)
+                        symbol_id += 1
+                    symbol = target_edge_symbol_map[key]
+                core_eq += symbol
+            
+            target_einsum_equation_lefthand += core_eq + ','
+        
         einsum_equation = f'{einsum_equation_lefthand}{target_einsum_equation_lefthand[:-1]}->'
-
+        
         tensor_shapes = [qctn.cores_weights[core_name].shape for core_name in cores_name] + \
                         [target_qctn.cores_weights[core_name].shape for core_name in target_cores_name]
-
+        
         return einsum_equation, tensor_shapes
 
     @staticmethod
@@ -371,58 +437,63 @@ class EinsumStrategy(ContractionStrategy):
         is_states_list = isinstance(circuit_states_shape, tuple) and circuit_states_shape and isinstance(circuit_states_shape[0], tuple)
         is_measure_list = isinstance(measure_shape, tuple) and measure_shape and isinstance(measure_shape[0], tuple)
         
-        input_ranks, adjacency_matrix, output_ranks = qctn.circuit
         cores_name = qctn.cores
-
         symbol_id = 0
-        einsum_equation_lefthand = ''
-
-        adjacency_matrix_for_interaction = adjacency_matrix.copy()
-
-        from ..core.qctn import QCTNHelper
-        for element in QCTNHelper.triu_ndindex(len(cores_name)):
-            i, j = element
-            if adjacency_matrix_for_interaction[i, j]:
-                connection_num = len(adjacency_matrix[i, j])
-                connection_symbols = [opt_einsum.get_symbol(symbol_id + k) for k in range(connection_num)]
-                symbol_id += connection_num
-                adjacency_matrix[i, j] = connection_symbols
-                adjacency_matrix[j, i] = connection_symbols
-
+        
+        # Map edge connections to symbols
+        edge_symbol_map = {}  # (core1_idx, core2_idx, qubit_idx) -> symbol
         input_symbols_stack = []
         output_symbols_stack = []
-
-        equation_list = []
+        
         new_symbol_mapping = {}
+        
+        equation_list = []
 
-        for idx, _ in enumerate(cores_name):
+        # Build equations for LEFT side cores
+        for core_info in qctn.adjacency_table:
+            core_idx = core_info['core_idx']
             core_equation = ""
-
-            for _ in input_ranks[idx]:
-                symbol = opt_einsum.get_symbol(symbol_id)
+            
+            # Add input edges
+            for edge in core_info['in_edge_list']:
+                if edge['neighbor_idx'] == -1:  # Circuit input
+                    symbol = opt_einsum.get_symbol(symbol_id)
+                    input_symbols_stack.append(symbol)
+                    symbol_id += 1
+                else:  # Connection from another core
+                    key = tuple(sorted([edge['neighbor_idx'], core_idx])) + (edge['qubit_idx'],)
+                    if key not in edge_symbol_map:
+                        edge_symbol_map[key] = opt_einsum.get_symbol(symbol_id)
+                        symbol_id += 1
+                    symbol = edge_symbol_map[key]
                 core_equation += symbol
-                input_symbols_stack.append(symbol)
-                symbol_id += 1
-
-            core_equation += "".join(list(itertools.chain.from_iterable(adjacency_matrix[idx])))
-
-            for _ in output_ranks[idx]:
-                symbol = opt_einsum.get_symbol(symbol_id)
+            
+            # Add output edges
+            for edge in core_info['out_edge_list']:
+                if edge['neighbor_idx'] == -1:  # Circuit output
+                    symbol = opt_einsum.get_symbol(symbol_id)
+                    output_symbols_stack.append(symbol)
+                    symbol_id += 1
+                else:  # Connection to another core
+                    key = tuple(sorted([core_idx, edge['neighbor_idx']])) + (edge['qubit_idx'],)
+                    if key not in edge_symbol_map:
+                        edge_symbol_map[key] = opt_einsum.get_symbol(symbol_id)
+                        symbol_id += 1
+                    symbol = edge_symbol_map[key]
                 core_equation += symbol
-                output_symbols_stack.append(symbol)
-                symbol_id += 1
-
+            
+            print(f"{cores_name[core_idx]} core_equation before sorting: {core_equation}")
             # TODO: use better strategy
-            ll = core_equation[:2]
-            rr = core_equation[2:]
-            # sort string characters
-            ll = list(ll)
-            ll.sort()
-            rr = list(rr)
-            rr.sort()
-            core_equation = "".join(ll + rr[::-1])
-
-            einsum_equation_lefthand += core_equation
+            # ll = core_equation[:len(core_info['in_edge_list'])]
+            # rr = core_equation[len(core_info['in_edge_list']):]
+            # # sort string characters
+            # ll = list(ll)
+            # ll.sort()
+            # rr = list(rr)
+            # rr.sort()
+            # core_equation = "".join(ll + rr[::-1])
+            # print(f"{cores_name[core_idx]} core_equation after sorting: {core_equation}")
+            
             equation_list.append(core_equation)
 
         middle_block_list = []
@@ -516,8 +587,12 @@ class EinsumStrategy(ContractionStrategy):
             else:
                 shapes_list.append(circuit_states_shape)
         
+        print(f"shapes_list after adding circuit_states: {len(shapes_list)} items")
+
         # Add core shapes
         shapes_list.extend(tensor_shapes)
+
+        print(f"shapes_list after adding cores: {len(shapes_list)} items")
 
         # Add measure_input shapes
         if measure_shape is not None:
@@ -526,8 +601,11 @@ class EinsumStrategy(ContractionStrategy):
             else:
                 shapes_list.append(measure_shape)
         
+        print(f"shapes_list after adding measure_input: {len(shapes_list)} items")
         # Add inverse core shapes
         shapes_list.extend(inv_tensor_shapes)
+
+        print(f"shapes_list after adding inverse cores: {len(shapes_list)} items")
         
         # Add conjugate side shapes
         if circuit_states_shape is not None:
@@ -536,6 +614,7 @@ class EinsumStrategy(ContractionStrategy):
             else:
                 shapes_list.append(circuit_states_shape)
         
+        print(f"shapes_list after adding conjugate circuit_states: {len(shapes_list)} items")
         tensor_shapes = shapes_list
 
         return einsum_equation, tensor_shapes
