@@ -86,6 +86,7 @@ class DistributedConfig:
     
     # Partitioning strategy: 'layer', 'core', 'auto'
     partition_strategy: str = 'layer'
+    partitions: Optional[List[List[str]]] = None
     
     # Minimum cores per partition
     min_cores_per_partition: int = 1
@@ -241,7 +242,7 @@ class DistributedTrainer:
         #     self._contract_plan = self.engine.init_distributed(self.qctn)
         # else:
         #     self._contract_plan = None
-        self._contract_plan = self.engine.init_distributed(self.qctn)
+        self._contract_plan = self.engine.init_distributed(self.qctn, partitions=self.config.partitions)
         
         # Setup checkpoint directory
         self.checkpoint_dir = Path(self.config.checkpoint_dir)

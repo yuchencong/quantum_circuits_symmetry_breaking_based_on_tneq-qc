@@ -77,6 +77,7 @@ def main():
         print(f"Backend: PyTorch CPU (gloo)")
         print()
     
+    # graph_type = "std"
     # graph_type = "tree"
     graph_type = "wall"
 
@@ -109,6 +110,20 @@ def main():
         
         # Partitioning configuration
         partition_strategy='layer',
+        # partitions = [
+        #     ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l'],
+        #     ['m', 'n', 'o', 'p'],
+        #     ['q', 'r', 's', 't'],
+        #     ['u', 'v', 'w', 'x', 'y', 'z', 'A', 'B', 'C', 'D', 'E', 'F'],
+        # ],
+        partitions = [
+            ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'o'],
+
+            ['n', 'p'],
+            ['r', 't'],
+
+            ['q', 's', 'u', 'v', 'w', 'x', 'y', 'z', 'A', 'B', 'C', 'D', 'E', 'F'],
+        ],
         
         # Training configuration
         max_steps=1000,
@@ -118,6 +133,51 @@ def main():
         momentum=0.9,
         stiefel=True,
     )
+
+
+    """
+    -3-a-3-----b-----3-
+    -3-a-3-c-3-b-3-d-3-
+    -3-e-3-c-3-f-3-d-3-
+    -3-e-3-g-3-f-3-h-3-
+    -3-i-3-g-3-j-3-h-3-
+    -3-i-3-k-3-j-3-l-3-
+    -3-m-3-k-3-n-3-l-3-
+    -3-m-3-o-3-n-3-p-3-
+    -3-q-3-o-3-r-3-p-3-
+    -3-q-3-s-3-r-3-t-3-
+    -3-u-3-s-3-v-3-t-3-
+    -3-u-3-w-3-v-3-x-3-
+    -3-y-3-w-3-z-3-x-3-
+    -3-y-3-A-3-z-3-B-3-
+    -3-C-3-A-3-D-3-B-3-
+    -3-C-3-E-3-D-3-F-3-
+    -3-----E-3-----F-3-
+
+
+
+    {'from_core': 'P0', 'to_core': 'P1', 'from_partition': 0, 'to_partition': 1, 'from_core_idx': 10, 'to_core_idx': 0, 'edge_rank': 3, 'qubit_idx': 6, 'from_core_raw': 'k', 'to_core_raw': 'n'}, 
+    {'from_core': 'P1', 'to_core': 'P0', 'from_partition': 1, 'to_partition': 0, 'from_core_idx': 0, 'to_core_idx': 11, 'edge_rank': 3, 'qubit_idx': 6, 'from_core_raw': 'n', 'to_core_raw': 'l'}, 
+    {'from_core': 'P0', 'to_core': 'P1', 'from_partition': 0, 'to_partition': 1, 'from_core_idx': 13, 'to_core_idx': 0, 'edge_rank': 3, 'qubit_idx': 7, 'from_core_raw': 'o', 'to_core_raw': 'n'}, 
+    {'from_core': 'P0', 'to_core': 'P2', 'from_partition': 0, 'to_partition': 2, 'from_core_idx': 13, 'to_core_idx': 0, 'edge_rank': 3, 'qubit_idx': 8, 'from_core_raw': 'o', 'to_core_raw': 'r'}, 
+    
+    {'from_core': 'P2', 'to_core': 'P1', 'from_partition': 2, 'to_partition': 1, 'from_core_idx': 0, 'to_core_idx': 1, 'edge_rank': 3, 'qubit_idx': 8, 'from_core_raw': 'r', 'to_core_raw': 'p'}, 
+    
+    {'from_core': 'P3', 'to_core': 'P0', 'from_partition': 3, 'to_partition': 0, 'from_core_idx': 0, 'to_core_idx': 13, 'edge_rank': 3, 'qubit_idx': 8, 'from_core_raw': 'q', 'to_core_raw': 'o'}, 
+    {'from_core': 'P3', 'to_core': 'P2', 'from_partition': 3, 'to_partition': 2, 'from_core_idx': 1, 'to_core_idx': 0, 'edge_rank': 3, 'qubit_idx': 9, 'from_core_raw': 's', 'to_core_raw': 'r'}, 
+    {'from_core': 'P3', 'to_core': 'P2', 'from_partition': 3, 'to_partition': 2, 'from_core_idx': 3, 'to_core_idx': 1, 'edge_rank': 3, 'qubit_idx': 10, 'from_core_raw': 'v', 'to_core_raw': 't'}
+
+
+
+    {'from_core': 'P0', 'to_core': 'P2', 'from_partition': 0, 'to_partition': 2, 'from_core_idx': 10, 'to_core_idx': 0, 'edge_rank': 3, 'qubit_idx': 6, 'from_core_raw': 'k', 'to_core_raw': 'n'}, 
+    {'from_core': 'P2', 'to_core': 'P0', 'from_partition': 2, 'to_partition': 0, 'from_core_idx': 0, 'to_core_idx': 11, 'edge_rank': 3, 'qubit_idx': 6, 'from_core_raw': 'n', 'to_core_raw': 'l'}, 
+    {'from_core': 'P0', 'to_core': 'P2', 'from_partition': 0, 'to_partition': 2, 'from_core_idx': 13, 'to_core_idx': 0, 'edge_rank': 3, 'qubit_idx': 7, 'from_core_raw': 'o', 'to_core_raw': 'n'}, 
+    {'from_core': 'P0', 'to_core': 'P1', 'from_partition': 0, 'to_partition': 1, 'from_core_idx': 13, 'to_core_idx': 1, 'edge_rank': 3, 'qubit_idx': 8, 'from_core_raw': 'o', 'to_core_raw': 'r'}, 
+    {'from_core': 'P3', 'to_core': 'P0', 'from_partition': 3, 'to_partition': 0, 'from_core_idx': 0, 'to_core_idx': 13, 'edge_rank': 3, 'qubit_idx': 8, 'from_core_raw': 'q', 'to_core_raw': 'o'}, 
+    {'from_core': 'P1', 'to_core': 'P2', 'from_partition': 1, 'to_partition': 2, 'from_core_idx': 1, 'to_core_idx': 1, 'edge_rank': 3, 'qubit_idx': 8, 'from_core_raw': 'r', 'to_core_raw': 'p'}, 
+    {'from_core': 'P3', 'to_core': 'P1', 'from_partition': 3, 'to_partition': 1, 'from_core_idx': 1, 'to_core_idx': 1, 'edge_rank': 3, 'qubit_idx': 9, 'from_core_raw': 's', 'to_core_raw': 'r'}, 
+    {'from_core': 'P3', 'to_core': 'P1', 'from_partition': 3, 'to_partition': 1, 'from_core_idx': 3, 'to_core_idx': 0, 'edge_rank': 3, 'qubit_idx': 10, 'from_core_raw': 'v', 'to_core_raw': 't'}
+    """
     
     if rank == 0:
         print("Configuration:")

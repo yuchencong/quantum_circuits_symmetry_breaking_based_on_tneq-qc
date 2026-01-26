@@ -291,6 +291,8 @@ class QCTNHelper:
                 L = 4
                 return generate_wall_graph(n, L, dim_char)
         
+            return generate_std_graph(n, dim_char)
+
             # return  "-3-A-3-"
             # return  "-3-A-3-B-3-C-3-D-3-"
 
@@ -495,10 +497,16 @@ class QCTN:
         self.qubit_indices = list(range(self.nqubits))
         
         import opt_einsum
+        idx2core = [opt_einsum.get_symbol(i) for i in range(10000)]
+        core2idx = {c: i for i, c in enumerate(idx2core)}
+
         full_cores = set([opt_einsum.get_symbol(i) for i in range(10000)])
         # full_cores = set([next(QCTNHelper.iter_symbols(True)) for _ in range(20000)])
 
         self.cores = list(set([c for c in graph if c in full_cores]))
+        # 把self.cores按照在full_cores的相对顺序排序
+        self.cores.sort(key=lambda x: core2idx[x])
+
         print(f"num cores: {len(self.cores)}")
 
 
@@ -511,7 +519,7 @@ class QCTN:
         #     self.cores = list(set([c for c in graph if 0x4E00 <= ord(c) <= 0x9FFF]))
         self.ncores = len(self.cores)
 
-        self.cores = sorted(self.cores)
+        # self.cores = sorted(self.cores)
 
         # This will build the attributes `self.circuit` and `self.adjacency_matrix`
         self._circuit_to_adjacency()

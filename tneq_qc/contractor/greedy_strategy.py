@@ -262,6 +262,8 @@ class GreedyStrategy(ContractionStrategy):
                 
                 # Update in_edges
                 for edge in entry['in_edge_list']:
+                    if 'is_cross_partition' in edge and edge['is_cross_partition']:
+                        continue
                     if edge['neighbor_idx'] == -1:
                         # Connect to Left Circuit
                         qubit_idx = edge['qubit_idx']
@@ -284,6 +286,8 @@ class GreedyStrategy(ContractionStrategy):
                 
                 # Update out_edges
                 for edge in entry['out_edge_list']:
+                    if 'is_cross_partition' in edge and edge['is_cross_partition']:
+                        continue
                     if edge['neighbor_idx'] == -1:
                         # Connect to Mx
                         qubit_idx = edge['qubit_idx']
@@ -310,6 +314,8 @@ class GreedyStrategy(ContractionStrategy):
                 
                 # Update in_edges (originally out_edges)
                 for edge in entry['in_edge_list']:
+                    if 'is_cross_partition' in edge and edge['is_cross_partition']:
+                        continue
                     if edge['neighbor_idx'] == -1:
                         # Originally out_edge to Mx (in reverse view)
                         # Connect to Mx's out_edge
@@ -333,6 +339,9 @@ class GreedyStrategy(ContractionStrategy):
                 
                 # Update out_edges (originally in_edges)
                 for edge in entry['out_edge_list']:
+                    if 'is_cross_partition' in edge and edge['is_cross_partition']:
+                        continue
+
                     if edge['neighbor_idx'] == -1:
                         # Originally in_edge from Circuit (in reverse view)
                         # Connect to Right Circuit

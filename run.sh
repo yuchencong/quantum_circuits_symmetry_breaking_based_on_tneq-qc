@@ -39,7 +39,7 @@ fi
 
 torchrun \
     --nnodes=1 \
-    --nproc_per_node=2 \
+    --nproc_per_node=4 \
     --node_rank=$RANK \
     --master_addr=$MASTER_ADDR \
     --master_port=$MASTER_PORT \

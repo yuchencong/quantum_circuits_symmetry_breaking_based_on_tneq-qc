@@ -296,7 +296,7 @@ class DistributedEngineSiamese:
     
     # ==================== Distributed Initialization ====================
     
-    def init_distributed(self, qctn: 'QCTN') -> DistributedContractPlan:
+    def init_distributed(self, qctn: 'QCTN', partitions=None) -> DistributedContractPlan:
         """
         Initialize distributed contraction for a QCTN.
         
@@ -315,7 +315,7 @@ class DistributedEngineSiamese:
         
         # Step 1: All processes compute the same partition (deterministic)
         # No broadcast needed - each process runs the same partitioning logic
-        partitions = self._partition_qctn(qctn)
+        partitions = self._partition_qctn(qctn, partitions=partitions)
         contract_plan = self._compute_contract_plan(qctn, partitions)
         
         # local_print(f"[Rank {self.rank}] Distributed contraction plan computed.")
@@ -336,7 +336,7 @@ class DistributedEngineSiamese:
         else:
             self._local_qctn = None
 
-        # self._print_local_qctn(self._local_qctn)
+        self._print_local_qctn(self._local_qctn)
         
         self._is_initialized = True
         
@@ -345,7 +345,7 @@ class DistributedEngineSiamese:
         
         return contract_plan
     
-    def _partition_qctn(self, qctn: 'QCTN') -> List[List[str]]:
+    def _partition_qctn(self, qctn: 'QCTN', partitions=None) -> List[List[str]]:
         """
         Partition QCTN cores across workers.
         
@@ -362,6 +362,10 @@ class DistributedEngineSiamese:
         num_partitions = self.partition_config.num_partitions
         cores = qctn.cores  # Already sorted
         ncores = len(cores)
+
+        if partitions is not None:
+            self._log(f"Using provided partition dict for partitioning.")
+            return partitions
         
         if ncores < num_partitions:
             # More partitions than cores: some partitions will be empty
@@ -704,6 +708,10 @@ class DistributedEngineSiamese:
         
         # Sort qubit indices to maintain order
         qubit_indices = sorted(qubit_indices_set)
+
+        if self.rank != 0:
+            # reverse qubit_indices
+            qubit_indices = qubit_indices[::-1]
         
         # Create a new QCTN-like object with local partition data
         # We use object.__new__ to avoid calling __init__ which parses a graph string
@@ -853,19 +861,28 @@ class DistributedEngineSiamese:
         # Extract local measure_input_list based on OUTPUT qubits
         local_measure_input_list = {i: measure_input_list[i] for i in output_qubit_indices}
         
-        local_print(f"[Rank {self.rank}] Local contraction: "
+        print(f"[Rank {self.rank}] Local contraction: "
               f"input_qubits={input_qubit_indices}, output_qubits={output_qubit_indices}")
+
+        import time
+
+        # if self.rank == 0:
+        #     exit()
+
+        tic = time.time()
 
         local_result = self._contract_local(local_circuit_states_list, local_measure_input_list, 
                                             measure_is_matrix, ret_type='TNTensor')
         
+        toc = time.time()
+
         # print(f"local_result {isinstance(local_result, TNTensor)}")
 
         if self.world_size == 1:
             local_print(f"[Rank {self.rank}] Single rank execution complete. Result shape: {local_result.shape}")
             return local_result
         
-        local_print(f"[Rank {self.rank}] Local contraction complete. Result shape: {local_result.shape}")
+        print(f"[Rank {self.rank}] Local contraction complete. Result shape: {local_result.shape} cost time {toc - tic}")
 
         # Reduction stages
         current_result = local_result
@@ -1042,6 +1059,9 @@ class DistributedEngineSiamese:
         my_partition = self.rank  # Assuming 1:1 mapping between rank and partition
         all_cross_edges = self._contract_plan.inter_node_graph.get('cross_edges', [])
         
+        # print(f'all_cross_edges : {all_cross_edges}')
+
+
         batch_size = local_tensor.shape[0]
         remaining_dims = list(local_tensor.shape[1:])
         n_dims = len(remaining_dims)
@@ -1125,6 +1145,8 @@ class DistributedEngineSiamese:
                     non_contract_dim_indices.append(offset + dim_idx)
                     non_contract_dim_indices.append(n_dims - (offset + dim_idx) - 1)
             
+            # print(f'[Rank {self.rank}] contract_dim_indices: {contract_dim_indices} non_contract_dim_indices: {non_contract_dim_indices}')
+
             # Build permutation: [batch, non_contract_dims..., contract_dims...]
             perm = [0] + [d + 1 for d in non_contract_dim_indices] + [d + 1 for d in contract_dim_indices]
             
