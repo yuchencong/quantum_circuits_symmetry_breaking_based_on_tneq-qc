@@ -81,7 +81,7 @@ def allreduce_with_grad(tensor: torch.Tensor, op: TorchReduceOp = TorchReduceOp.
         >>> loss = compute_loss(full_result)
         >>> loss.backward()  # gradients flow through allreduce
     """
-    return AllReduceGrad.apply(tensor, op)
+    return AllReduceGrad.apply(tensor, op, group)
 
 
 class AllGatherGrad(torch.autograd.Function):

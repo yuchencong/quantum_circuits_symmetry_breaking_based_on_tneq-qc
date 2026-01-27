@@ -369,6 +369,10 @@ if __name__ == "__main__":
     #                       output_file = './assets/marginal_probability_heatmap_5qubits_exp01.png',
     #                       device='cpu')
     
+    test_heatmap_marginal(qctn_cores_file="./assets/qctn_cores_257qubitsstd_dist_00.safetensors",
+                          output_file = './assets/marginal_probability_heatmap_257qubitsstd_dist_00.png',
+                          device='cpu')
+
     test_heatmap_marginal(qctn_cores_file="./assets/qctn_cores_16qubitstree_exp01.safetensors",
                           output_file = './assets/marginal_probability_heatmap_16qubitstree_exp01.png',
                           device='cpu')

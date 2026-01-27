@@ -268,6 +268,22 @@ class DistributedEngineSiamese:
         
         self._log(f"DistributedEngineSiamese initialized: rank={self.rank}/{self.world_size}, "
                   f"timeout={comm_timeout}s, retry={enable_comm_retry}")
+        
+
+        self.num_stages = math.ceil(math.log2(self.world_size)) + 1 if self.world_size > 1 else 1
+
+        import torch.distributed as dist
+
+        self._pg_cache = {}
+        for stage_idx in range(self.num_stages):
+            for j in range(0, self.world_size, 2**stage_idx):
+                group = list(range(j, min(j + 2**stage_idx, self.world_size)))
+
+                dist_group = dist.new_group(group)
+
+                self._pg_cache[tuple(group)] = dist_group
+                
+        
     
     def _log(self, msg: str, level: str = "info"):
         """Log message only on main process."""
@@ -389,7 +405,7 @@ class DistributedEngineSiamese:
         else:
             self._local_qctn = None
 
-        self._print_local_qctn(self._local_qctn)
+        # self._print_local_qctn(self._local_qctn)
         
         self._is_initialized = True
         
@@ -914,8 +930,8 @@ class DistributedEngineSiamese:
         # Extract local measure_input_list based on OUTPUT qubits
         local_measure_input_list = {i: measure_input_list[i] for i in output_qubit_indices}
         
-        print(f"[Rank {self.rank}] Local contraction: "
-              f"input_qubits={input_qubit_indices}, output_qubits={output_qubit_indices}")
+        # print(f"[Rank {self.rank}] Local contraction: "
+        #       f"input_qubits={input_qubit_indices}, output_qubits={output_qubit_indices}")
 
         import time
 
@@ -1047,7 +1063,7 @@ class DistributedEngineSiamese:
             self.comm.barrier()
             local_print(f"[Rank {self.rank}] Stage {stage_idx} exit barrier passed")
         except Exception as e:
-            print(f"[Rank {self.rank}] ERROR: Exit barrier failed at stage {stage_idx}: {e}")
+            local_print(f"[Rank {self.rank}] ERROR: Exit barrier failed at stage {stage_idx}: {e}")
             raise
         
         return result
@@ -1799,15 +1815,19 @@ class DistributedEngineSiamese:
         # Group list must be sorted for consistent key
         ranks = tuple(sorted(rank_list))
         
+        local_print(f"[Rank {self.rank}] Retrieving process group for ranks: {ranks} cache {self._pg_cache}")
+
         if ranks not in self._pg_cache:
             if len(ranks) <= 1:
                 self._pg_cache[ranks] = None
             elif len(ranks) == self.world_size:
                 self._pg_cache[ranks] = None # Use WORLD group
             else:
-                local_print(f"[Rank {self.rank}] Creating new process group for ranks: {ranks}")
+                print(f"[Rank {self.rank}] Creating new process group for ranks: {ranks}")
                 self._pg_cache[ranks] = dist.new_group(ranks)
-                
+
+        local_print(f"[Rank {self.rank}] Using process group for ranks: {ranks} -> {self._pg_cache[ranks]}")
+
         return self._pg_cache[ranks]
 
     def _allreduce_with_grad(self, tensor: 'torch.Tensor', group_ranks: Optional[List[int]] = None) -> 'torch.Tensor':
@@ -1831,7 +1851,8 @@ class DistributedEngineSiamese:
         # If not using distributed or single process, return as-is
         if self.world_size == 1 or not dist.is_initialized():
             return tensor
-            
+        
+        local_print(f"[Rank {self.rank}] Performing gradient-aware allreduce on tensor shape {tensor.shape} {group_ranks}")
         # Determine process group
         pg = None
         if group_ranks is not None:
@@ -1839,6 +1860,7 @@ class DistributedEngineSiamese:
         
         # Use gradient-aware allreduce
         from ..optim.allreduce_grad import allreduce_with_grad
+
         return allreduce_with_grad(tensor, TorchReduceOp.SUM, group=pg)
     
     def contract_distributed_with_gradient(self,

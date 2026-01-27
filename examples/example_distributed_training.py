@@ -26,6 +26,7 @@ from tneq_qc.distributed.optim import DistributedSGDG, LRScheduler
 
 from tneq_qc.core.qctn import QCTNHelper
 from tqdm import tqdm
+import psutil
 
 def generate_2qubits_graph(n):
     graph = ""
@@ -61,6 +62,13 @@ def main():
         rank = 0
         world_size = 1
     
+    
+    
+
+    # 打印当前进程绑定的核心 ID
+    p = psutil.Process()
+    print(f"LOCAL_RANK {rank}: Affinity: {p.cpu_affinity()}")
+
     # Print node information
     num_nodes = int(os.environ.get('NNODES', 1))
     node_rank = int(os.environ.get('NODE_RANK', 0))
@@ -77,17 +85,18 @@ def main():
         print(f"Backend: PyTorch CPU (gloo)")
         print()
     
-    # graph_type = "std"
+    graph_type = "std"
     # graph_type = "tree"
-    graph_type = "wall"
+    # graph_type = "wall"
 
     # graph = QCTNHelper.generate_example_graph(n=2)
     # graph = QCTNHelper.generate_example_graph(n=3)
     # graph = QCTNHelper.generate_example_graph(n=5)
-    graph = QCTNHelper.generate_example_graph(n=17, graph_type=graph_type, dim_char='3')
+    graph = QCTNHelper.generate_example_graph(n=257, graph_type=graph_type, dim_char='3')
+    # graph = QCTNHelper.generate_example_graph(n=17, graph_type=graph_type, dim_char='3')
     # graph = QCTNHelper.generate_example_graph(n=17, dim_char='16')
     # graph = generate_2qubits_graph(n=16)
-    print(f"[Rank {rank}] QCTN graph:\n{graph}")
+    # print(f"[Rank {rank}] QCTN graph:\n{graph}")
 
     # Create distributed configuration
     config = DistributedConfig(
@@ -116,14 +125,14 @@ def main():
         #     ['q', 'r', 's', 't'],
         #     ['u', 'v', 'w', 'x', 'y', 'z', 'A', 'B', 'C', 'D', 'E', 'F'],
         # ],
-        partitions = [
-            ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'o'],
+        # partitions = [
+        #     ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'o'],
 
-            ['n', 'p'],
-            ['r', 't'],
+        #     ['n', 'p'],
+        #     ['r', 't'],
 
-            ['q', 's', 'u', 'v', 'w', 'x', 'y', 'z', 'A', 'B', 'C', 'D', 'E', 'F'],
-        ],
+        #     ['q', 's', 'u', 'v', 'w', 'x', 'y', 'z', 'A', 'B', 'C', 'D', 'E', 'F'],
+        # ],
         
         # Training configuration
         max_steps=1000,
@@ -181,7 +190,7 @@ def main():
     
     if rank == 0:
         print("Configuration:")
-        print(f"  QCTN graph: {config.qctn_graph}")
+        # print(f"  QCTN graph: {config.qctn_graph}")
         print(f"  Max steps: {config.max_steps}")
         print(f"  Learning rate: {config.learning_rate}")
         print(f"  Optimizer: {config.optimizer}")

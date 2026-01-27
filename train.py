@@ -38,18 +38,21 @@ if __name__ == "__main__":
 
     backend = BackendFactory.create_backend(backend_type, device='cpu')
 
-    engine = EngineSiamese(backend=backend, strategy_mode="balanced", mx_K=100)
+    # engine = EngineSiamese(backend=backend, strategy_mode="balanced", mx_K=100)
+    engine = EngineSiamese(backend=backend, strategy_mode="fast", mx_K=100)
 
     suffix = "_exp01"
     # graph_type = "tree"
-    graph_type = "wall"
+    # graph_type = "wall"
+    graph_type = "std"
     # qctn_graph = QCTNHelper.generate_example_graph(n=17, dim_char='3')
     # qctn_graph = QCTNHelper.generate_example_graph(n=17, graph_type="std", dim_char='3')
     # print(f"std qctn_graph: \n{qctn_graph}")
 
     # qctn_graph = QCTNHelper.generate_example_graph(n=17, graph_type=graph_type, dim_char='3')
-    qctn_graph = QCTNHelper.generate_example_graph(n=17, graph_type=graph_type, dim_char='3')
-    print(f"wall qctn_graph: \n{qctn_graph}")
+    # qctn_graph = QCTNHelper.generate_example_graph(n=17, graph_type=graph_type, dim_char='3')
+    qctn_graph = QCTNHelper.generate_example_graph(n=5, graph_type=graph_type, dim_char='3')
+    print(f"{graph_type} qctn_graph: \n{qctn_graph}")
     
 
     qctn = QCTN(qctn_graph, backend=engine.backend)
