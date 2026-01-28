@@ -17,6 +17,7 @@ from typing import Dict, Any, Callable, List, Set, Optional
 from copy import deepcopy
 from enum import Enum
 from ..core.tn_tensor import TNTensor
+from ..core.qctn import QCTN
 
 from .base import ContractionStrategy
 
@@ -37,11 +38,11 @@ class GreedyStrategy(ContractionStrategy):
         """
         return True
     
-    def get_compute_function(self, qctn, shapes_info: Dict[str, Any], backend) -> Callable:
+    def get_compute_function(self, qctn, shapes_info: Dict[str, Any], backend, right_qctn="symmetric") -> Callable:
         """
         Return computation function for greedy contraction.
         """
-        def compute_fn(cores_dict, circuit_states, measure_matrices):
+        def compute_fn(_cores_dict, circuit_states, measure_matrices, right_cores_dict=None):
             """
             Greedy contraction strategy with symmetric expansion.
             
@@ -64,6 +65,7 @@ class GreedyStrategy(ContractionStrategy):
             
             nqubits = qctn.nqubits
             ncores = qctn.ncores
+            cores_dict = {k: v for k, v in _cores_dict.items()}
             
             # ========================================
             # Step 1: Build core_tensor_list with basic info
@@ -190,32 +192,71 @@ class GreedyStrategy(ContractionStrategy):
             # 1.4 Add RIGHT version cores
             # Right version: in becomes out, out becomes in. Lists reversed. Tensor NOT transposed.
             right_core_map = {} # original_idx -> new_idx
-            
-            for core_info in qctn.adjacency_table:
-                uid = get_uid()
-                right_core_map[core_info['core_idx']] = uid
+            if isinstance(right_qctn, str) and right_qctn == "symmetric":
                 
-                # print(f'add core_entry {core_info["core_name"]}_R with \n in_edge_list {core_info["in_edge_list"]} \n out_edge_list {core_info["out_edge_list"]}')
+                for core_info in qctn.adjacency_table:
+                    uid = get_uid()
+                    right_core_map[core_info['core_idx']] = uid
+                    
+                    # print(f'add core_entry {core_info["core_name"]}_R with \n in_edge_list {core_info["in_edge_list"]} \n out_edge_list {core_info["out_edge_list"]}')
 
-                # Reverse edges: in becomes out, out becomes in
-                # Also reverse the order within each list
-                reversed_in_edges = deepcopy(core_info['out_edge_list'])[::-1]
-                reversed_out_edges = deepcopy(core_info['in_edge_list'])[::-1]
-                
-                core_entry = {
-                    'core_idx': uid,
-                    'core_name': f"{core_info['core_name']}_R",
-                    'tensor_source': 'core',
-                    'tensor_key': core_info['core_name'],
-                    'in_edge_list': reversed_in_edges,
-                    'out_edge_list': reversed_out_edges,
-                    'side': TensorSide.RIGHT,
-                    'original_core_idx': core_info['core_idx'],
-                    'original_in_count': len(core_info['in_edge_list']),
-                    'original_out_count': len(core_info['out_edge_list']),
-                    'batch_symbol': "",
-                }
-                core_tensor_list.append(core_entry)
+                    # Reverse edges: in becomes out, out becomes in
+                    # Also reverse the order within each list
+
+                    new_in_edges = deepcopy(core_info['out_edge_list'])[::-1]
+                    new_out_edges = deepcopy(core_info['in_edge_list'])[::-1]
+                    
+                    core_entry = {
+                        'core_idx': uid,
+                        'core_name': f"{core_info['core_name']}_R",
+                        'tensor_source': 'core',
+                        'tensor_key': core_info['core_name'],
+                        'in_edge_list': new_in_edges,
+                        'out_edge_list': new_out_edges,
+                        'side': TensorSide.RIGHT,
+                        'original_core_idx': core_info['core_idx'],
+                        'original_in_count': len(core_info['in_edge_list']),
+                        'original_out_count': len(core_info['out_edge_list']),
+                        'batch_symbol': "",
+                    }
+                    core_tensor_list.append(core_entry)
+            elif isinstance(right_qctn, QCTN):
+                for core_info in right_qctn.adjacency_table:
+                    uid = get_uid()
+
+                    # print(f"core_info {core_info}")
+                    
+                    cores_dict["right_" + core_info['core_name']] = right_cores_dict[core_info['core_name']]
+
+                    core_idx = core_info['core_idx'] + len(left_core_map)
+                    right_core_map[core_idx] = uid
+                    
+                    # print(f'add core_entry {core_info["core_name"]}_R with \n in_edge_list {core_info["in_edge_list"]} \n out_edge_list {core_info["out_edge_list"]}')
+
+                    # Reverse edges: in becomes out, out becomes in
+                    # Also reverse the order within each list
+
+                    new_in_edges = deepcopy(core_info['in_edge_list'])
+                    new_out_edges = deepcopy(core_info['out_edge_list'])
+                    
+                    core_entry = {
+                        'core_idx': uid,
+                        'core_name': f"{core_info['core_name']}_R",
+                        'tensor_source': 'core',
+                        'tensor_key': "right_" + core_info['core_name'],
+                        'in_edge_list': new_in_edges,
+                        'out_edge_list': new_out_edges,
+                        'side': TensorSide.RIGHT,
+                        'original_core_idx': core_idx,
+                        'original_in_count': len(core_info['in_edge_list']),
+                        'original_out_count': len(core_info['out_edge_list']),
+                        'batch_symbol': "",
+                    }
+                    core_tensor_list.append(core_entry)
+            elif right_qctn is None:
+                pass
+            else:
+                raise ValueError("Invalid right_qctn parameter.")
             
             # 1.5 Add RIGHT version circuit_states
             right_circuit_map = {} # qubit_idx -> new_idx

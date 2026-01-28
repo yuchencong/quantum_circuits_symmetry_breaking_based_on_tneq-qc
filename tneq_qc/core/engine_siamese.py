@@ -179,7 +179,7 @@ class EngineSiamese:
     # Strategy-based Compilation Methods (NEW API)
     # ============================================================================
 
-    def contract_with_compiled_strategy(self, qctn, circuit_states_list, measure_input_list, measure_is_matrix=True, ret_type='tensor') -> Any:
+    def contract_with_compiled_strategy(self, qctn, circuit_states_list, measure_input_list, measure_is_matrix=True, right_qctn="symmetric", ret_type='tensor') -> Any:
         """
         Contract using compiled strategy (auto-selected based on mode).
         
@@ -196,7 +196,9 @@ class EngineSiamese:
         """
 
         circuit_states = circuit_states_list
-        if isinstance(circuit_states_list, list):
+        if circuit_states_list is None:
+            states_shape = None
+        elif isinstance(circuit_states_list, list):
             states_shape = tuple([s.shape if s is not None else () for s in circuit_states_list])
         elif isinstance(circuit_states_list, dict):
             states_shape = tuple([circuit_states_list[i].shape if circuit_states_list[i] is not None else () 
@@ -220,7 +222,7 @@ class EngineSiamese:
         
         if not hasattr(qctn, cache_key):
             # Compile strategy
-            compute_fn, strategy_name, cost = self.strategy_compiler.compile(qctn, shapes_info, self.backend)
+            compute_fn, strategy_name, cost = self.strategy_compiler.compile(qctn, shapes_info, self.backend, right_qctn=right_qctn)
             
             # Cache the result
             setattr(qctn, cache_key, {
@@ -238,9 +240,15 @@ class EngineSiamese:
         # Prepare data
         # Pass cores weights directly to support TNTensor
         cores_dict = {name: qctn.cores_weights[name] for name in qctn.cores}
-        
+
+        right_cores_dict = None
+        if right_qctn is not None:
+            right_cores_dict = {}
+            for name in right_qctn.cores:
+                right_cores_dict[name] = right_qctn.cores_weights[name]
+
         # Execute
-        result = compute_fn(cores_dict, circuit_states, measure_input)
+        result = compute_fn(cores_dict, circuit_states, measure_input, right_cores_dict=right_cores_dict)
         
         if isinstance(result, TNTensor):
             # result.scale_to(1.0)
@@ -251,7 +259,7 @@ class EngineSiamese:
         else:
             return result
 
-    def contract_with_compiled_strategy_for_gradient(self, qctn, circuit_states_list, measure_input_list, measure_is_matrix=True) -> Tuple:
+    def contract_with_compiled_strategy_for_gradient(self, qctn, circuit_states_list, measure_input_list, measure_is_matrix=True, right_qctn="symmetric") -> Tuple:
         """
         Contract using compiled strategy and compute gradients.
         
@@ -290,7 +298,7 @@ class EngineSiamese:
         
         if not hasattr(qctn, cache_key):
             # Compile strategy
-            compute_fn, strategy_name, cost = self.strategy_compiler.compile(qctn, shapes_info, self.backend)
+            compute_fn, strategy_name, cost = self.strategy_compiler.compile(qctn, shapes_info, self.backend, right_qctn=right_qctn)
             
             # Cache the result
             setattr(qctn, cache_key, {
@@ -309,44 +317,73 @@ class EngineSiamese:
         # We need to separate tensors (which require grad) from scales (constants)
         raw_core_tensors = []
         core_scales = []
-        
         for c_name in qctn.cores:
             c = qctn.cores_weights[c_name]
+            if isinstance(c, TNTensor) and not c.tensor.requires_grad:
+                continue
+            if not isinstance(c, TNTensor) and not c.requires_grad:
+                continue
             if isinstance(c, TNTensor):
                 raw_core_tensors.append(c.tensor)
                 core_scales.append(c.scale)
             else:
                 raw_core_tensors.append(c)
                 core_scales.append(1.0)
-
+        
+        if right_qctn is not None:
+            for c_name in right_qctn.cores:
+                c = right_qctn.cores_weights[c_name]
+                if isinstance(c, TNTensor) and not c.tensor.requires_grad:
+                    continue
+                if not isinstance(c, TNTensor) and not c.requires_grad:
+                    continue
+                c = right_qctn.cores_weights[c_name]
+                if isinstance(c, TNTensor):
+                    raw_core_tensors.append(c.tensor)
+                    core_scales.append(c.scale)
+                else:
+                    raw_core_tensors.append(c)
+                    core_scales.append(1.0)
+        
         # Define loss function
         def loss_fn(*core_tensors_args):
-            # Reconstruct cores_dict with TNTensors or raw tensors
-            reconstructed_cores_dict = {}
-
             
+            offset = 0
 
-            for i, name in enumerate(qctn.cores):
-                tensor = core_tensors_args[i]
-                scale = core_scales[i]
-                
-                # Check if we should wrap in TNTensor
-                # We do this if the original was TNTensor (scale != 1.0 is a heuristic, but better to check original type)
-                # But here we simplified lists. Let's assume if we have a scale, we wrap.
-                # Actually, compute_fn might EXPECT TNTensor if strategy was compiled/checked against it?
-                # GreedyStrategy is dynamic.
-                
-                if isinstance(qctn.cores_weights[name], TNTensor):
-                    reconstructed_cores_dict[name] = TNTensor(tensor, scale)
+            cores_dict = {}
+            for c_name in qctn.cores:
+                c = qctn.cores_weights[c_name]
+                if isinstance(c, TNTensor):
+                    c = c.tensor
+                if c.requires_grad:
+                    tensor = TNTensor(core_tensors_args[offset], core_scales[offset])
+                    offset += 1
                 else:
-                    reconstructed_cores_dict[name] = tensor
+                    tensor = c
+                
+                cores_dict[c_name] = tensor
+            
+            right_cores_dict = {}
+            if right_qctn is not None:
+                for c_name in right_qctn.cores:
+                    # print(f"right_qctn iter core: {c_name}")
+                    c = right_qctn.cores_weights[c_name]
+                    
+                    if isinstance(c, TNTensor):
+                        c = c.tensor
+                    if c.requires_grad:
+                        tensor = TNTensor(core_tensors_args[offset], core_scales[offset])
+                        offset += 1
+                    else:
+                        tensor = c
+                    right_cores_dict[c_name] = tensor
+            
+            # print(f'cores_dict keys: {list(cores_dict.keys())}')
+            # print(f'right_cores_dict keys: {list(right_cores_dict.keys())}')
 
+            result = compute_fn(cores_dict, circuit_states, measure_input, right_cores_dict=right_cores_dict)
             
-            # Execute contraction
-            # compute_fn will handle TNTensors internally (auto-scaling intermediate results)
-            result = compute_fn(reconstructed_cores_dict, circuit_states, measure_input)
-            
-            print(f'result {result.shape}')
+            # print(f'result {result.shape}')
 
             # Result might be TNTensor or raw tensor
             if isinstance(result, TNTensor):
@@ -358,6 +395,12 @@ class EngineSiamese:
                 res_scale = 1.0
                 res_log_scale = 0.0
             
+            # mse loss
+
+            loss = self.backend.mean((res_tensor - 1.0) ** 2)
+            return loss
+
+
             # Compute Cross Entropy loss
             # Target is all ones (maximizing probability)
             target = self.backend.ones(res_tensor.shape, dtype=res_tensor.dtype)
@@ -408,6 +451,8 @@ class EngineSiamese:
         
         # Execute
         loss, grads = value_and_grad_fn(*raw_core_tensors)
+
+        # print(f'input num {len(raw_core_tensors)} grad output num {len(grads)}')
         
 
         # grads = [grads[i] / core_scales[i] for i in range(len(core_scales))]

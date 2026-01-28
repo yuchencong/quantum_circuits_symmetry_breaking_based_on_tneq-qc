@@ -63,7 +63,7 @@ class StrategyCompiler:
         """Get strategies (uses class-level registry)"""
         return self._strategies
     
-    def compile(self, qctn, shapes_info: Dict[str, Any], backend) -> Tuple[Callable, str, float]:
+    def compile(self, qctn, shapes_info: Dict[str, Any], backend, **kwargs) -> Tuple[Callable, str, float]:
         """
         Compile: Select optimal strategy and return computation function
         
@@ -107,7 +107,7 @@ class StrategyCompiler:
             print(f"  [{name}] Estimated cost: {cost:.2e} FLOPs")
             
             # Generate computation function
-            compute_fn = strategy.get_compute_function(qctn, shapes_info, backend)
+            compute_fn = strategy.get_compute_function(qctn, shapes_info, backend, **kwargs)
             
             candidates.append({
                 'name': name,
