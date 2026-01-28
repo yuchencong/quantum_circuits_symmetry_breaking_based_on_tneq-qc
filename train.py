@@ -38,8 +38,8 @@ if __name__ == "__main__":
 
     backend = BackendFactory.create_backend(backend_type, device='cpu')
 
-    # engine = EngineSiamese(backend=backend, strategy_mode="balanced", mx_K=100)
-    engine = EngineSiamese(backend=backend, strategy_mode="fast", mx_K=100)
+    engine = EngineSiamese(backend=backend, strategy_mode="balanced", mx_K=100)
+    # engine = EngineSiamese(backend=backend, strategy_mode="fast", mx_K=100)
 
     suffix = "_exp01"
     # graph_type = "tree"
@@ -51,6 +51,7 @@ if __name__ == "__main__":
 
     # qctn_graph = QCTNHelper.generate_example_graph(n=17, graph_type=graph_type, dim_char='3')
     # qctn_graph = QCTNHelper.generate_example_graph(n=17, graph_type=graph_type, dim_char='3')
+    # qctn_graph = QCTNHelper.generate_example_graph(n=5, graph_type=graph_type, dim_char='3')
     qctn_graph = QCTNHelper.generate_example_graph(n=5, graph_type=graph_type, dim_char='3')
     print(f"{graph_type} qctn_graph: \n{qctn_graph}")
     
@@ -82,97 +83,6 @@ if __name__ == "__main__":
 
     circuit_states_list = generate_circuit_states_list(num_qubits=D, K=K, device=backend.backend_info.device)
 
-
-    # for i in tqdm(range(1000)):
-    #     with torch.no_grad():
-    #         result = engine.contract_with_compiled_strategy(qctn, 
-    #                                             circuit_states_list=circuit_states_list,
-    #                                             measure_input_list=data_list_for_optim[i % N]["measure_input_list"], 
-    #                                             measure_is_matrix=True,
-    #                                             )
-    #     print(f"Initial Result: {[result[x].item() for x in range(10)]}")
-    # exit()
-
-    # torch profiler memory usage test
-    import torch.profiler
-
-    # torch.cuda.empty_cache()
-    # with torch.profiler.profile(
-    #     activities=[
-    #         torch.profiler.ProfilerActivity.CPU,
-    #         torch.profiler.ProfilerActivity.CUDA,
-    #     ],
-    #     schedule=torch.profiler.schedule(
-    #         wait=1,
-    #         warmup=1,
-    #         active=3),
-    #     # on_trace_ready=torch.profiler.tensorboard_trace_handler('./log/tneq_qc_run'),
-    #     record_shapes=True,
-    #     profile_memory=True,
-    #     with_stack=True
-    # ) as prof:
-    #     for step in range(100):
-    #         with torch.no_grad():
-    #             result = engine.contract_with_self(qctn, 
-    #                                                 circuit_states=circuit_states_list,
-    #                                                 measure_input=data_list[0]["measure_input_list"], 
-    #                                                 measure_is_matrix=True,
-    #                                                 )
-    #         prof.step()
-    # print(prof.key_averages().table(sort_by="cuda_memory_usage", row_limit=10))
-
-    # torch.cuda.empty_cache()
-    # with torch.profiler.profile(
-    #     activities=[
-    #         # torch.profiler.ProfilerActivity.CPU,
-    #         torch.profiler.ProfilerActivity.CUDA,
-    #     ],
-    #     schedule=torch.profiler.schedule(
-    #         wait=1,
-    #         warmup=1,
-    #         active=3),
-    #     # on_trace_ready=torch.profiler.tensorboard_trace_handler('./log/tneq_qc_run'),
-    #     record_shapes=True,
-    #     profile_memory=True,
-    #     with_stack=True
-    # ) as prof:
-    #     for step in range(10):
-    #         with torch.no_grad():
-    #             result = engine.contract_with_std_graph(qctn,
-    #                                                     circuit_states_list=circuit_states_list,
-    #                                                     measure_input_list=data_list[0]["measure_input_list"],
-    #                                                     )
-    #         prof.step()
-    # print(prof.key_averages().table(sort_by="cuda_memory_usage", row_limit=10))
-
-    # torch.cuda.empty_cache()
-    # with torch.no_grad():
-    #     result = engine.contract_with_self(qctn, 
-    #                                         circuit_states=circuit_states_list,
-    #                                         measure_input=data_list[0]["measure_input_list"], 
-    #                                         measure_is_matrix=True,
-    #                                         )
-    # print(f"Initial Result: {[result[x].item() for x in range(10)]}")
-
-    # print(f"已分配显存: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
-    # print(f"缓存显存: {torch.cuda.memory_reserved() / 1024**2:.2f} MB")
-
-    # exit()
-
-    # torch.cuda.empty_cache()
-    # with torch.no_grad():
-    #     # for i in range(10):
-    #     result = engine.contract_with_std_graph(qctn,
-    #                                             circuit_states_list=circuit_states_list,
-    #                                             measure_input_list=data_list[0]["measure_input_list"],
-    #                                             )
-    # print(f"Initial Result (std graph): {[result[x].item() for x in range(10)]}")
-
-    # print(f"已分配显存: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
-    # print(f"缓存显存: {torch.cuda.memory_reserved() / 1024**2:.2f} MB")
-
-    # exit()
-
     # Define step-based learning rate schedule
     # Format: list of (step, lr) tuples
     # At step 0: lr = 1e-2
@@ -190,8 +100,8 @@ if __name__ == "__main__":
         max_iter=num_step, 
         # tol=1e-6, 
         tol=0.0, 
-        # learning_rate=1e-2, 
-        learning_rate=1e-3, 
+        learning_rate=1e-2, 
+        # learning_rate=1e-3, 
         beta1=0.9, 
         beta2=0.95, 
         epsilon=1e-8,
@@ -209,7 +119,8 @@ if __name__ == "__main__":
     optimizer.optimize(qctn, 
                        data_list=data_list_for_optim, 
                     #    circuit_states=circuit_states_list,
-                       circuit_states_list=circuit_states_list,
+                    #    circuit_states_list=circuit_states_list,
+                       circuit_states_list=None,
                        )
 
     toc = time.time()

@@ -899,7 +899,7 @@ def _contract_symmetric_group(
         # total_scale *= tmp
         # total_log_scale += np.log(tmp)
 
-        # result_tensor = TNTensor(raw_result / tmp, scale=total_scale * tmp)
+        # result_tensor = TNTensor(raw_result / tmp, scale=total_scale * tmp, log_scale=total_log_scale + np.log(tmp))
 
         # Create result TNTensor
         result_tensor = TNTensor(raw_result, scale=total_scale, log_scale=total_log_scale)

@@ -15,7 +15,7 @@ import math
 from ..contractor import EinsumStrategy, StrategyCompiler, GreedyStrategy
 from ..backends.backend_factory import BackendFactory, ComputeBackend
 from .tn_tensor import TNTensor
-
+from tqdm import tqdm
 
 class EngineSiamese:
     """
@@ -168,7 +168,7 @@ class EngineSiamese:
 
             if ret_type == "TNTensor":
                 tmp = TNTensor(tmp)
-                # tmp.auto_scale()
+                tmp.auto_scale()
 
             Mx_list.append(tmp)
         
@@ -268,7 +268,10 @@ class EngineSiamese:
         """
 
         circuit_states = circuit_states_list
-        states_shape = tuple([s.shape if s is not None else () for s in circuit_states_list])
+        if circuit_states_list is not None:
+            states_shape = tuple([s.shape if s is not None else () for s in circuit_states_list])
+        else:
+            states_shape = None
 
         if isinstance(measure_input_list[0], TNTensor):
             measure_shape = tuple([m.tensor.shape if m is not None else () for m in measure_input_list])
@@ -343,6 +346,8 @@ class EngineSiamese:
             # compute_fn will handle TNTensors internally (auto-scaling intermediate results)
             result = compute_fn(reconstructed_cores_dict, circuit_states, measure_input)
             
+            print(f'result {result.shape}')
+
             # Result might be TNTensor or raw tensor
             if isinstance(result, TNTensor):
                 res_tensor = result.tensor
@@ -645,7 +650,7 @@ class EngineSiamese:
         samples = self.backend.zeros((num_samples, qctn.nqubits))
 
         # 4. Sampling Loop
-        for q_idx in range(qctn.nqubits):
+        for q_idx in tqdm(range(qctn.nqubits)):
             # Step A: Generate Mx for Grid
             grid_x_input = self.backend.unsqueeze(grid_x, 1) # (G, 1)
             mx_list_grid, _ = self.generate_data(grid_x_input, K=K)
