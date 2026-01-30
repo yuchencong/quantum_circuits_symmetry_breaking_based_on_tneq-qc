@@ -43,8 +43,8 @@ if __name__ == "__main__":
 
     suffix = "_exp01"
     # graph_type = "tree"
-    graph_type = "wall"
-    # graph_type = "std"
+    # graph_type = "wall"
+    graph_type = "std"
     # qctn_graph = QCTNHelper.generate_example_graph(n=17, dim_char='3')
     # qctn_graph = QCTNHelper.generate_example_graph(n=17, graph_type="std", dim_char='3')
     # print(f"std qctn_graph: \n{qctn_graph}")
@@ -53,18 +53,18 @@ if __name__ == "__main__":
     # qctn_graph = QCTNHelper.generate_example_graph(n=17, graph_type=graph_type, dim_char='3')
     # qctn_graph = QCTNHelper.generate_example_graph(n=5, graph_type=graph_type, dim_char='3')
     # qctn_graph = QCTNHelper.generate_example_graph(n=5, graph_type=graph_type, dim_char='3')
-    qctn_graph = QCTNHelper.generate_example_graph(n=3, graph_type=graph_type, dim_char='3')
+    qctn_graph = QCTNHelper.generate_example_graph(n=257, graph_type=graph_type, dim_char='3')
     print(f"{graph_type} qctn_graph: \n{qctn_graph}")
     
+    
+    qctn = QCTN(qctn_graph, backend=engine.backend)
 
-    # qctn = QCTN(qctn_graph, backend=engine.backend)
-
-    qctn = QCTN.from_pretrained(qctn_graph, "assets/qctn_cores_3qubitswall_dist_00.safetensors", backend=engine.backend)
+    # qctn = QCTN.from_pretrained(qctn_graph, "assets/qctn_cores_3qubitswall_dist_00.safetensors", backend=engine.backend)
     # pretrained_qctn = QCTN.from_pretrained(qctn_graph, "assets/qctn_cores_3qubitswall_dist_00.safetensors", backend=engine.backend)
-    right_qctn = QCTN(qctn_graph, backend=engine.backend)
-    N = 1
-    # B = 1024
-    B = 1
+    # right_qctn = QCTN(qctn_graph, backend=engine.backend)
+    N = 100
+    B = 1024
+    # B = 1
     D = qctn.nqubits
     K = 3
     num_step = 1000
@@ -76,8 +76,8 @@ if __name__ == "__main__":
     for i in range(N):
         x = torch.empty((B, D), device=device).normal_(mean=0.0, std=1.0)
 
-        # Mx_list, out = engine.generate_data(x, K=K, ret_type='TNTensor')
-        Mx_list, out = engine.generate_data(x, K=K)
+        Mx_list, out = engine.generate_data(x, K=K, ret_type='TNTensor')
+        # Mx_list, out = engine.generate_data(x, K=K)
 
         data_list += [({"measure_input_list": Mx_list}, out)]
 
@@ -85,42 +85,34 @@ if __name__ == "__main__":
     # We only need the dict part for optimizer
     data_list_for_optim = [x[0] for x in data_list]
 
-    for i in range(len(data_list_for_optim)):
-        x = data_list_for_optim[i]["measure_input_list"]
-        data_list_for_optim[i]["measure_input_list"] = [torch.eye(tensor.shape[-1], device=tensor.device) for tensor in x]
+    # for i in range(len(data_list_for_optim)):
+    #     x = data_list_for_optim[i]["measure_input_list"]
+    #     data_list_for_optim[i]["measure_input_list"] = [torch.eye(tensor.shape[-1], device=tensor.device) for tensor in x]
 
-    print(data_list_for_optim[0]["measure_input_list"][0].shape)
-
+    # print(data_list_for_optim[0]["measure_input_list"][0].shape)
+    
     circuit_states_list = generate_circuit_states_list(num_qubits=D, K=K, device=backend.backend_info.device)
 
     for c_name in qctn.cores:
         core_tensor = qctn.cores_weights[c_name]
-        requires_grad = core_tensor.requires_grad
+        if isinstance(core_tensor, torch.Tensor):
+            core_tensor.requires_grad_(True)
+        else:
+            core_tensor.tensor.requires_grad_(True)
+
+        # elif isinstance(core_tensor, TNTensor):
+        #     core_tensor.tensor.requires_grad_(True)
+        requires_grad = core_tensor.tensor.requires_grad
         print(f"core {c_name} requires_grad: {requires_grad}")
     
 
-    for c_name in right_qctn.cores:
-        core_tensor = right_qctn.cores_weights[c_name]
-        core_tensor.requires_grad_(True)
+    # for c_name in right_qctn.cores:
+    #     core_tensor = right_qctn.cores_weights[c_name]
+    #     core_tensor.requires_grad_(True)
 
-        requires_grad = core_tensor.requires_grad
-        print(f"pretrained core {c_name} requires_grad: {requires_grad}")
-        
-
-    # pretrained_result = engine.contract_with_compiled_strategy(
-    #     qctn,
-    #     circuit_states_list=None,
-    #     measure_input_list=data_list_for_optim[0]["measure_input_list"],
-    #     right_qctn=pretrained_qctn,
-    # )
-    # print(f"Pretrained Result (std graph): {pretrained_result.shape}")
-    # exit()
-
-    # Define step-based learning rate schedule
-    # Format: list of (step, lr) tuples
-    # At step 0: lr = 1e-2
-    # At step 200: lr drops to 1e-3 (10x decay)
-    # At step 800: lr drops to 1e-4 (another 10x decay)
+    #     requires_grad = core_tensor.requires_grad
+    #     print(f"pretrained core {c_name} requires_grad: {requires_grad}")
+    
     lr_schedule = [
         (0, 1e-2),
         (200, 5e-3),
@@ -129,7 +121,7 @@ if __name__ == "__main__":
     ]
 
     optimizer = Optimizer(
-        method='adam', 
+        method='sgdg', 
         max_iter=num_step, 
         # tol=1e-6, 
         tol=0.0, 
@@ -154,7 +146,7 @@ if __name__ == "__main__":
                     #    circuit_states=circuit_states_list,
                        circuit_states_list=circuit_states_list,
                     #    circuit_states_list=None,
-                       right_qctn=right_qctn,
+                    #    right_qctn=right_qctn,
                        )
 
     toc = time.time()

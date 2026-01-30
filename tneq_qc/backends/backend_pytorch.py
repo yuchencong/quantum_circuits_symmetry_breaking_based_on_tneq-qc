@@ -182,6 +182,7 @@ class BackendPyTorch(ComputeBackend):
                     # params[i].scale_to(scale)
                     # params[i].auto_scale()
 
+                    params[i].tensor.requires_grad_(True)
                     # params[i].tensor.grad.zero_()
                 else:
                     params[i] = new_raw_params[i]

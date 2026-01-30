@@ -754,10 +754,10 @@ class QCTN:
             full_shape = input_shape + output_shape
             core = self.backend.reshape(core, full_shape)
 
-            self.cores_weights[core_name] = core
-            # self.cores_weights[core_name] = TNTensor(core)
             # self.cores_weights[core_name] = core
-            # self.cores_weights[core_name].auto_scale()
+            self.cores_weights[core_name] = TNTensor(core)
+            # self.cores_weights[core_name] = core
+            self.cores_weights[core_name].auto_scale()
 
     def save_cores(self, file_path: Union[str, Path], metadata: Optional[Mapping[str, str]] = None):
         """Save all core tensors into a safetensors file."""
@@ -806,10 +806,10 @@ class QCTN:
                 continue
             array = tensor_dict[key]
             tensor = self.backend.convert_to_tensor(array)
-            # tn_tensor = TNTensor(tensor)
-            # tn_tensor.auto_scale()
-            # self.cores_weights[core_name] = tn_tensor
-            self.cores_weights[core_name] = tensor
+            tn_tensor = TNTensor(tensor)
+            tn_tensor.auto_scale()
+            self.cores_weights[core_name] = tn_tensor
+            # self.cores_weights[core_name] = tensor
 
         metadata_dict = {str(k): str(v) for k, v in metadata.items()}
         self._loaded_metadata = metadata_dict

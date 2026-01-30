@@ -293,7 +293,7 @@ def test_sampling(qctn_cores_file="./assets/qctn_cores_3qubits_exp1.safetensors"
     circuit_states = generate_circuit_states_list(D, K, device=device)
     circuit_states = [engine.backend.convert_to_tensor(s) for s in circuit_states]
     
-    num_samples = 10000  # Increased for better visualization
+    num_samples = 1000  # Increased for better visualization
     
     print(f"Sampling {num_samples} samples from {D}-qubit circuit using Numerical Inverse CDF...")
     # Using bounds [-5, 5] and grid_size 1000 as per instructions
@@ -368,7 +368,17 @@ if __name__ == "__main__":
     # test_heatmap_marginal(qctn_cores_file="./assets/qctn_cores_5qubits_exp01.safetensors",
     #                       output_file = './assets/marginal_probability_heatmap_5qubits_exp01.png',
     #                       device='cpu')
+    test_sampling(qctn_cores_file="./assets/qctn_cores_129qubitsstd_exp01.safetensors", 
+                    output_file="./assets/samples_scatter_129qubitsstd_exp01.png",
+                    device='cpu')
+
+    test_heatmap_marginal(qctn_cores_file="./assets/qctn_cores_129qubitsstd_exp01.safetensors",
+                          output_file = './assets/marginal_probability_heatmap_129qubitsstd_exp01.png',
+                          device='cpu')
     
+    exit()
+
+
     test_heatmap_marginal(qctn_cores_file="./assets/qctn_cores_257qubitsstd_dist_00.safetensors",
                           output_file = './assets/marginal_probability_heatmap_257qubitsstd_dist_00.png',
                           device='cpu')

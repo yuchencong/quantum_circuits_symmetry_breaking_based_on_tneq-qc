@@ -948,7 +948,7 @@ def _contract_symmetric_group(
 
         # tmp = result_tensor.tensor.abs().max()
         
-        # result_tensor.auto_scale()
+        result_tensor.auto_scale()
     else:
         result_tensor = torch.einsum(einsum_eq, *tensor_list)
 

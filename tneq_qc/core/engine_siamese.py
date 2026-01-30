@@ -16,6 +16,7 @@ from ..contractor import EinsumStrategy, StrategyCompiler, GreedyStrategy
 from ..backends.backend_factory import BackendFactory, ComputeBackend
 from .tn_tensor import TNTensor
 from tqdm import tqdm
+from .qctn import QCTN
 
 class EngineSiamese:
     """
@@ -319,6 +320,7 @@ class EngineSiamese:
         core_scales = []
         for c_name in qctn.cores:
             c = qctn.cores_weights[c_name]
+            # print(f"qctn cores grad {c_name} {c.tensor.requires_grad}")
             if isinstance(c, TNTensor) and not c.tensor.requires_grad:
                 continue
             if not isinstance(c, TNTensor) and not c.requires_grad:
@@ -330,7 +332,9 @@ class EngineSiamese:
                 raw_core_tensors.append(c)
                 core_scales.append(1.0)
         
-        if right_qctn is not None:
+        # print(f"raw_core_tensors {len(raw_core_tensors)}")
+
+        if right_qctn is not None and isinstance(right_qctn, QCTN):
             for c_name in right_qctn.cores:
                 c = right_qctn.cores_weights[c_name]
                 if isinstance(c, TNTensor) and not c.tensor.requires_grad:
@@ -364,7 +368,7 @@ class EngineSiamese:
                 cores_dict[c_name] = tensor
             
             right_cores_dict = {}
-            if right_qctn is not None:
+            if right_qctn is not None and isinstance(right_qctn, QCTN):
                 for c_name in right_qctn.cores:
                     # print(f"right_qctn iter core: {c_name}")
                     c = right_qctn.cores_weights[c_name]
@@ -396,9 +400,8 @@ class EngineSiamese:
                 res_log_scale = 0.0
             
             # mse loss
-
-            loss = self.backend.mean((res_tensor - 1.0) ** 2)
-            return loss
+            # loss = self.backend.mean((res_tensor - 1.0) ** 2)
+            # return loss
 
 
             # Compute Cross Entropy loss
@@ -454,7 +457,6 @@ class EngineSiamese:
 
         # print(f'input num {len(raw_core_tensors)} grad output num {len(grads)}')
         
-
         # grads = [grads[i] / core_scales[i] for i in range(len(core_scales))]
 
         # tmp = {i: (grads[i], core_scales[i]) for i in range(len(grads))}
