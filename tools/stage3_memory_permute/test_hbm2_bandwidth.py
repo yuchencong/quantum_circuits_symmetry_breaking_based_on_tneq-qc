@@ -11,12 +11,12 @@ import json
 import os
 import numpy as np
 
-def benchmark_copy(size_mb, num_trials=50):
+def benchmark_copy(size_mb, num_trials=5):
     """测试张量复制带宽"""
     num_elements = int(size_mb * 1024 * 1024 / 4)  # FP32 = 4 bytes
     
-    # 预热
-    for _ in range(5):
+    # 预热（缩短为 2 次，减少总耗时）
+    for _ in range(2):
         src = torch.randn(num_elements)
         dst = src.clone()
     
@@ -56,13 +56,13 @@ def test_single_cmg_bandwidth():
     print("理论峰值: 256 GB/s (单 CMG)")
     print("-" * 80)
     
-    # 测试不同大小
-    sizes_mb = [1, 4, 16, 64, 256, 1024, 4096]
+    # 测试不同大小（缩小到较小数据量，便于快速运行）
+    sizes_mb = [4, 16, 64]
     results = []
     
     for size_mb in sizes_mb:
         print(f"\n测试数据大小: {size_mb} MB")
-        result = benchmark_copy(size_mb, num_trials=30)
+        result = benchmark_copy(size_mb, num_trials=5)
         results.append(result)
         
         print(f"  平均时间: {result['avg_time_ms']:.2f} ms")
@@ -72,12 +72,12 @@ def test_single_cmg_bandwidth():
     
     return results
 
-def benchmark_fill(size_mb, num_trials=50):
+def benchmark_fill(size_mb, num_trials=5):
     """测试张量填充带宽"""
     num_elements = int(size_mb * 1024 * 1024 / 4)
     
     # 预热
-    for _ in range(5):
+    for _ in range(2):
         tensor = torch.empty(num_elements)
         tensor.fill_(1.0)
     
@@ -112,7 +112,7 @@ def test_fill_bandwidth():
     print("填充操作带宽测试 (纯写入)")
     print("=" * 80)
     
-    sizes_mb = [16, 64, 256, 1024, 4096]
+    sizes_mb = [16, 64]
     results = []
     
     for size_mb in sizes_mb:
@@ -125,12 +125,12 @@ def test_fill_bandwidth():
     
     return results
 
-def benchmark_add_inplace(size_mb, num_trials=50):
+def benchmark_add_inplace(size_mb, num_trials=5):
     """测试 in-place 加法带宽 (读+写)"""
     num_elements = int(size_mb * 1024 * 1024 / 4)
     
     # 预热
-    for _ in range(5):
+    for _ in range(2):
         tensor = torch.randn(num_elements)
         tensor.add_(1.0)
     
@@ -162,7 +162,7 @@ def test_readwrite_bandwidth():
     print("读写混合带宽测试 (add_ in-place)")
     print("=" * 80)
     
-    sizes_mb = [16, 64, 256, 1024, 4096]
+    sizes_mb = [16, 64]
     results = []
     
     for size_mb in sizes_mb:
@@ -180,7 +180,8 @@ def test_strided_access():
     print("跨步访问带宽测试")
     print("=" * 80)
     
-    size = 1024 * 1024 * 256  # 1GB
+    # 原始为 1GB，这里缩小为 64MB 以便在本地快速运行
+    size = 1024 * 1024 * 16
     strides = [1, 2, 4, 8, 16]
     results = []
     
@@ -191,13 +192,13 @@ def test_strided_access():
         tensor = torch.randn(size)
         
         # 预热
-        for _ in range(5):
+        for _ in range(2):
             view = tensor[::stride]
             _ = view.clone()
         
-        # 测试
+        # 测试（减少次数以缩短时间）
         times = []
-        for _ in range(20):
+        for _ in range(5):
             view = tensor[::stride]
             
             start = time.perf_counter()
@@ -240,8 +241,8 @@ def analyze_results(all_results):
     
     # 分析复制带宽
     if "copy_bandwidth" in all_results and all_results["copy_bandwidth"]:
-        # 取最大数据量的带宽作为峰值
-        large_data = [r for r in all_results["copy_bandwidth"] if r["size_mb"] >= 256]
+        # 取较大数据量的带宽作为峰值（阈值从 256MB 调整为 16MB，适配快速测试）
+        large_data = [r for r in all_results["copy_bandwidth"] if r["size_mb"] >= 16]
         if large_data:
             peak_bw = max([r["peak_bandwidth_gbps"] for r in large_data])
             analysis["peak_copy_bandwidth"] = peak_bw
@@ -271,7 +272,7 @@ def analyze_results(all_results):
     
     # 分析填充带宽
     if "fill_bandwidth" in all_results and all_results["fill_bandwidth"]:
-        large_data = [r for r in all_results["fill_bandwidth"] if r["size_mb"] >= 256]
+        large_data = [r for r in all_results["fill_bandwidth"] if r["size_mb"] >= 16]
         if large_data:
             peak_fill = max([r["peak_bandwidth_gbps"] for r in large_data])
             analysis["peak_fill_bandwidth"] = peak_fill

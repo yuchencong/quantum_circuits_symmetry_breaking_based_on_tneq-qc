@@ -6,6 +6,22 @@ echo "富岳集群测试 - 第二阶段：计算微基准测试"
 echo "================================================================================"
 echo ""
 
+# 激活 conda 环境
+if command -v conda &> /dev/null; then
+    echo "激活 conda 环境: py311"
+    eval "$(conda shell.bash hook)"
+    conda activate py311
+    if [ $? -eq 0 ]; then
+        echo "✓ conda 环境 py311 已激活"
+        echo "Python 版本: $(python --version)"
+    else
+        echo "⚠ 无法激活 py311 环境，使用系统默认 Python"
+    fi
+else
+    echo "⚠ conda 未安装，使用系统默认 Python"
+fi
+echo ""
+
 # 创建结果目录
 RESULT_DIR="../test_results/stage2"
 mkdir -p "$RESULT_DIR"

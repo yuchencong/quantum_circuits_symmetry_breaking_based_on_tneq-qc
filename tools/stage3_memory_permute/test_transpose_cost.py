@@ -11,10 +11,10 @@ import json
 import os
 import numpy as np
 
-def benchmark_permute(shape, perm, num_trials=50):
+def benchmark_permute(shape, perm, num_trials=5):
     """测试特定维度重排的性能"""
-    # 预热
-    for _ in range(5):
+    # 预热（缩短为 2 次，减少总耗时）
+    for _ in range(2):
         tensor = torch.randn(*shape)
         permuted = tensor.permute(*perm)
         _ = permuted.contiguous()
@@ -158,7 +158,7 @@ def test_transpose_vs_einsum():
     
     results = []
     
-    # 测试案例: 矩阵乘法需要转置
+    # 测试案例: 矩阵乘法需要转置（保持中等尺寸，同时减少次数以加快测试）
     M, N, K = 512, 512, 512
     
     print(f"\n测试: ({M}x{K}) @ ({K}x{N})")
@@ -168,13 +168,13 @@ def test_transpose_vs_einsum():
     A = torch.randn(M, K)
     B = torch.randn(N, K)  # 注意这里是 NxK，需要转置
     
-    # 预热
-    for _ in range(10):
+    # 预热（由 10 次缩短为 3 次）
+    for _ in range(3):
         B_t = B.t().contiguous()
         _ = torch.matmul(A, B_t)
     
     times_explicit = []
-    for _ in range(50):
+    for _ in range(10):
         start = time.perf_counter()
         B_t = B.t().contiguous()
         result = torch.matmul(A, B_t)
@@ -184,11 +184,11 @@ def test_transpose_vs_einsum():
     avg_explicit = np.mean(times_explicit) * 1000
     
     # 方法 2: einsum (隐式处理)
-    for _ in range(10):
+    for _ in range(3):
         _ = torch.einsum('mk,nk->mn', A, B)
     
     times_einsum = []
-    for _ in range(50):
+    for _ in range(10):
         start = time.perf_counter()
         result = torch.einsum('mk,nk->mn', A, B)
         end = time.perf_counter()

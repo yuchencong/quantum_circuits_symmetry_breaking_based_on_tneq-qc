@@ -17,10 +17,11 @@ def set_num_threads(num_threads):
     print(f"设置 PyTorch 线程数: {num_threads}")
     print(f"当前线程数: {torch.get_num_threads()}")
 
-def benchmark_gemm(M, N, K, dtype=torch.float32, num_warmup=5, num_trials=20):
+def benchmark_gemm(M, N, K, dtype=torch.float32, num_warmup=2, num_trials=5):
     """
     基准测试矩阵乘法 (GEMM)
     C = A @ B, 其中 A 是 MxK, B 是 KxN
+    （快速模式：少量预热和试验，约 5s 内完成）
     """
     # 预热
     for _ in range(num_warmup):
@@ -66,7 +67,8 @@ def test_square_gemm_fp32():
     print("FP32 方阵 GEMM 测试")
     print("=" * 80)
     
-    sizes = [1024, 2048, 4096, 8192]
+    # 缩小规模以便约 5s 内完成（原 1024–8192）
+    sizes = [512, 1024, 2048]
     results = []
     
     for N in sizes:
@@ -89,7 +91,8 @@ def test_square_gemm_fp16():
     print("FP16 方阵 GEMM 测试")
     print("=" * 80)
     
-    sizes = [1024, 2048, 4096, 8192]
+    # 缩小规模以便约 5s 内完成
+    sizes = [512, 1024, 2048]
     results = []
     
     for N in sizes:
@@ -97,7 +100,7 @@ def test_square_gemm_fp16():
         print("-" * 80)
         
         try:
-            result = benchmark_gemm(N, N, N, dtype=torch.float16, num_trials=20)
+            result = benchmark_gemm(N, N, N, dtype=torch.float16, num_trials=5)
             results.append(result)
             
             print(f"  平均时间: {result['avg_time_ms']:.2f} ± {result['std_time_ms']:.2f} ms")
@@ -116,12 +119,12 @@ def test_rectangular_gemm():
     print("非方阵 GEMM 测试 (张量网络常见形状)")
     print("=" * 80)
     
-    # 常见的张量网络收缩形状
+    # 常见的张量网络收缩形状（缩小以便约 5s 内完成）
     shapes = [
-        (1024, 2048, 1024),  # 瘦长矩阵
-        (2048, 1024, 2048),  # 宽短矩阵
-        (512, 8192, 512),    # 极端瘦长
-        (4096, 4096, 1024),  # 批量小矩阵
+        (512, 1024, 512),   # 瘦长矩阵
+        (1024, 512, 1024),  # 宽短矩阵
+        (256, 1024, 256),   # 极端瘦长
+        (1024, 1024, 512),  # 批量小矩阵
     ]
     
     results = []
@@ -130,7 +133,7 @@ def test_rectangular_gemm():
         print(f"\n测试规模: {M}x{K} @ {K}x{N}")
         print("-" * 80)
         
-        result = benchmark_gemm(M, N, K, dtype=torch.float32, num_trials=15)
+        result = benchmark_gemm(M, N, K, dtype=torch.float32, num_trials=5)
         results.append(result)
         
         print(f"  平均时间: {result['avg_time_ms']:.2f} ms")

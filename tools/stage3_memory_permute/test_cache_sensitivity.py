@@ -13,7 +13,7 @@ import numpy as np
 
 # 富岳 A64FX: 每个 CMG 有 8MB L2 Cache (共享)
 
-def benchmark_matmul_sizes(sizes, num_trials=30):
+def benchmark_matmul_sizes(sizes, num_trials=3):
     """测试不同矩阵尺寸的性能，观察 cache 影响"""
     results = []
     
@@ -68,24 +68,12 @@ def test_cache_working_set():
     print("A64FX L2 Cache: 8MB per CMG")
     print("-" * 80)
     
-    # 设计尺寸跨越 L2 Cache 大小
-    # 8MB / 4 bytes = 2M elements = sqrt(2M) ≈ 1414 for square matrix
-    # 测试从小于 L2 到远大于 L2 的范围
-    
+    # 为了在本地快速运行，仅保留少量代表性尺寸（覆盖 L2 以内和略大于 L2 的情况）
     sizes = [
-        # L2 以内
-        256,   # ~0.75 MB
-        512,   # ~3 MB
-        724,   # ~6 MB (接近 L2)
-        
-        # L2 临界点附近
-        1024,  # ~12 MB (超出 L2)
-        1448,  # ~25 MB
-        
-        # 远超 L2
-        2048,  # ~48 MB
-        2896,  # ~100 MB
-        4096,  # ~192 MB
+        128,   # L2 以内，极小
+        256,   # L2 以内
+        512,   # L2 以内
+        1024,  # 略大于 L2
     ]
     
     results = benchmark_matmul_sizes(sizes)
@@ -107,8 +95,9 @@ def test_blocking_strategy():
     print("矩阵分块策略测试")
     print("=" * 80)
     
-    N = 2048  # 大矩阵
-    block_sizes = [64, 128, 256, 512, 1024]
+    # 原始为 N=2048 和多种块大小，这里缩小到 N=512 并减少块大小集合，便于快速运行
+    N = 512
+    block_sizes = [64, 128, 256]
     
     results = []
     
@@ -120,7 +109,7 @@ def test_blocking_strategy():
     print("-" * 80)
     
     times = []
-    for _ in range(10):
+    for _ in range(3):
         start = time.perf_counter()
         C = torch.matmul(A, B)
         end = time.perf_counter()
@@ -171,9 +160,9 @@ def test_blocking_strategy():
         # 预热
         _ = blocked_matmul(A, B, block_size)
         
-        # 测试
+        # 测试（进一步减少试验次数）
         times = []
-        for _ in range(5):  # 分块计算较慢，减少试验次数
+        for _ in range(2):
             start = time.perf_counter()
             C_blocked = blocked_matmul(A, B, block_size)
             end = time.perf_counter()
@@ -204,7 +193,8 @@ def test_access_patterns():
     print("访问模式 Cache 性能测试")
     print("=" * 80)
     
-    size = 4096
+    # 原始为 4096，这里缩小到 1024 并减少循环次数，以便快速运行
+    size = 1024
     tensor = torch.randn(size, size)
     
     results = []
@@ -214,7 +204,7 @@ def test_access_patterns():
     print("-" * 80)
     
     times = []
-    for _ in range(20):
+    for _ in range(3):
         start = time.perf_counter()
         sum_val = 0.0
         for i in range(size):
@@ -235,7 +225,7 @@ def test_access_patterns():
     print("-" * 80)
     
     times = []
-    for _ in range(20):
+    for _ in range(3):
         start = time.perf_counter()
         sum_val = 0.0
         for j in range(size):

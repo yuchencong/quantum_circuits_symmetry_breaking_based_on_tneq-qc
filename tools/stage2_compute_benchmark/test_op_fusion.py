@@ -11,8 +11,8 @@ import json
 import os
 import numpy as np
 
-def benchmark_operation(func, *args, num_warmup=5, num_trials=50):
-    """通用操作基准测试"""
+def benchmark_operation(func, *args, num_warmup=2, num_trials=10):
+    """通用操作基准测试（快速模式：少量预热和试验，约 5s 内完成）"""
     # 预热
     for _ in range(num_warmup):
         _ = func(*args)
@@ -45,7 +45,8 @@ def test_matmul_add_fusion():
     print("矩阵乘加融合测试")
     print("=" * 80)
     
-    sizes = [512, 1024, 2048, 4096]
+    # 缩小规模以便约 5s 内完成
+    sizes = [512, 1024]
     results = []
     
     for N in sizes:
@@ -93,8 +94,8 @@ def test_baddbmm_fusion():
     print("批量矩阵乘加融合测试 (baddbmm)")
     print("=" * 80)
     
-    batch_size = 32
-    matrix_sizes = [256, 512, 1024]
+    batch_size = 16
+    matrix_sizes = [256, 512]
     results = []
     
     for N in matrix_sizes:
@@ -143,7 +144,8 @@ def test_activation_fusion():
     print("激活函数融合测试")
     print("=" * 80)
     
-    sizes = [1024, 4096, 16384]
+    # 缩小规模以便约 5s 内完成（原 1024–16384）
+    sizes = [512, 1024]
     results = []
     
     for N in sizes:
@@ -188,7 +190,8 @@ def test_memory_overhead():
     print("内存分配开销测试")
     print("=" * 80)
     
-    sizes = [1024, 2048, 4096]
+    # 缩小规模与试验次数以便约 5s 内完成
+    sizes = [512, 1024]
     results = []
     
     for N in sizes:
@@ -205,7 +208,7 @@ def test_memory_overhead():
             C[:] = A + B
             return C
         
-        result_new = benchmark_operation(allocate_new, A, B, num_trials=100)
+        result_new = benchmark_operation(allocate_new, A, B, num_trials=15)
         
         # 方法 2: 预分配后 in-place
         C_preallocated = torch.zeros(N, N)
@@ -213,7 +216,7 @@ def test_memory_overhead():
             torch.add(A, B, out=C)
             return C
         
-        result_inplace = benchmark_operation(inplace_op, A, B, C_preallocated, num_trials=100)
+        result_inplace = benchmark_operation(inplace_op, A, B, C_preallocated, num_trials=15)
         
         speedup = result_new["avg_time_us"] / result_inplace["avg_time_us"]
         
