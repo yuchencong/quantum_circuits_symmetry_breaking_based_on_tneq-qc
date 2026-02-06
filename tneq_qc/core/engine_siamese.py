@@ -57,25 +57,26 @@ class EngineSiamese:
         self.mx_weights = self._init_mx_weights(mx_K)
 
     def _init_mx_weights(self, k_max):
-        """Initialize normalization weights for Hermite polynomials."""
+        """Initialize normalization weights for Hermite polynomials.
         
-        # Compute on CPU first to avoid lgamma issues on some CUDA versions if backend is PyTorch
-        # But we want to use backend interface.
-        
-        # We can try to use backend methods directly.
-        # Assuming backend implements arange, lgamma, exp, log
-        
-        # Create k on correct device using backend
-        # Note: backend.arange signature: arange(end, dtype=None)
-        # We need float32 for lgamma
-        k = self.backend.arange(k_max + 1, dtype=self.backend.torch.float32)
-        
-        log_factorial = self.backend.lgamma(k + 1)
+        为了兼容不同 backend（以及复数 dtype），这里在 CPU/NumPy 上用实数先算出权重，
+        再通过 backend.convert_to_tensor 转成对应后端/设备上的张量。
+        """
+        # k = 0, 1, ..., k_max
+        k = np.arange(k_max + 1, dtype=np.float64)
+
+        # log(k!) = lgamma(k+1)
+        log_factorial = np.array([math.lgamma(int(ki) + 1) for ki in k], dtype=np.float64)
         log_2pi = math.log(2 * math.pi)
         log_factor = -0.5 * (0.5 * log_2pi + log_factorial)
-        
-        weights = self.backend.exp(log_factor)
-        
+
+        weights_np = np.exp(log_factor).astype(np.float64)  # 实数权重
+
+        # 缓存一份 NumPy 权重，方便 complex 情况下在 CPU/实数域复用
+        self._mx_weights_np = weights_np
+
+        # 转成 backend 张量（会自动放到 backend 默认 device / dtype，上层若是 complex，会自动提升为复数）
+        weights = self.backend.convert_to_tensor(weights_np)
         return weights
 
     def _eval_hermitenorm_batch(self, n_max, x):
@@ -109,6 +110,26 @@ class EngineSiamese:
 
         return H
 
+    def _eval_hermitenorm_batch_np(self, n_max, x_np: np.ndarray):
+        """
+        NumPy 版本的 Hermite 多项式计算，行为对齐 reference_code 中的实现。
+
+        Args:
+            n_max (int): 最高阶数（包含），即计算 k = 0..n_max。
+            x_np (ndarray): 实数输入，形状 [B, D]。
+
+        Returns:
+            ndarray: 形状为 [n_max+1, B, D] 的实数数组。
+        """
+        x_np = np.asarray(x_np, dtype=np.float64)
+        H = np.zeros((n_max + 1,) + x_np.shape, dtype=np.float64)
+        H[0] = 1.0
+        if n_max >= 1:
+            H[1] = x_np
+            for i in range(2, n_max + 1):
+                H[i] = x_np * H[i - 1] - (i - 1) * H[i - 2]
+        return H
+
     def generate_data(self, x, K: int = None, ret_type='tensor'):
         """
         Generate data (Mx and phi_x) for a given batch of x.
@@ -122,23 +143,80 @@ class EngineSiamese:
         """
         if K is None:
             K = self.mx_K
-        
+
+        # 确保 x 使用 backend 的设备和 dtype（包括复数 dtype）
+        x = self.backend.convert_to_tensor(x)
+
         num_qubits = x.shape[1]
         
-        # Get weights slice. Ensure K doesn't exceed precomputed weights
-        if K > self.mx_K:
-             if K > self.mx_weights.shape[0]:
-                 self.mx_weights = self._init_mx_weights(K)
-                 self.mx_K = K
+        # 若 K 超过已预计算的范围，则扩展权重
+        if K > self.mx_K or K > self.mx_weights.shape[0]:
+            self.mx_weights = self._init_mx_weights(K)
+            self.mx_K = K
 
+        # 检查 backend 是否为复数 dtype
+        backend_info = getattr(self.backend, "backend_info", None)
+        backend_dtype = getattr(backend_info, "dtype", None) if backend_info is not None else None
+        is_complex_backend = backend_dtype is not None and "complex" in str(backend_dtype)
+
+        # ================================
+        # complex 后端：完全在 CPU/实数域中按参考代码计算，再转换回 complex
+        # ================================
+        if is_complex_backend:
+            # 统一使用实数 x（与 reference_code 一致），忽略虚部
+            x_np = self.backend.tensor_to_numpy(x)
+            x_np = np.asarray(x_np.real, dtype=np.float64)  # [B, D]
+
+            # 确保有 NumPy 形式的权重
+            if not hasattr(self, "_mx_weights_np") or self._mx_weights_np.shape[0] < self.mx_K + 1:
+                # 触发一次初始化来刷新 _mx_weights_np
+                self.mx_weights = self._init_mx_weights(self.mx_K)
+
+            # 取前 K 项权重，并 reshape 成 [1, 1, K]
+            weights_np = np.asarray(self._mx_weights_np[:K], dtype=np.float64)
+            weights_np = weights_np[None, None, :]  # [1, 1, K]
+
+            # 计算 Hermite 多项式：shape [K, B, D]
+            H_np = self._eval_hermitenorm_batch_np(K - 1, x_np)
+
+            # 高斯因子 sqrt(exp(-x^2/2))，shape [B, D, 1]
+            gaussian_np = np.sqrt(np.exp(-np.square(x_np) / 2.0))[..., None]
+
+            # 调整维度为 [B, D, K] 并应用权重与高斯因子
+            phi_x_np = np.transpose(H_np, (1, 2, 0))  # [B, D, K]
+            phi_x_np = weights_np * gaussian_np * phi_x_np
+
+            # Mx: [B, D, K, K]，完全实数计算
+            Mx_np = np.einsum("bdk,bdl->bdkl", phi_x_np, phi_x_np)
+
+            # 转回 backend tensor（在 complex 后端会被提升到 complex dtype，但数值仍为实数）
+            phi_x_tensor = self.backend.convert_to_tensor(phi_x_np)
+
+            Mx_list = []
+            for i in range(num_qubits):
+                tmp_np = Mx_np[:, i, :, :]
+                tmp_tensor = self.backend.convert_to_tensor(tmp_np)
+
+                if ret_type == "TNTensor":
+                    tmp_tt = TNTensor(tmp_tensor)
+                    tmp_tt.auto_scale()
+                    Mx_list.append(tmp_tt)
+                else:
+                    Mx_list.append(tmp_tensor)
+
+            return Mx_list, phi_x_tensor
+
+        # ================================
+        # 非 complex 后端：保持原有 backend 上的实现
+        # ================================
         weights = self.mx_weights[:K]
         # weights = weights[None, None, :] # [1, 1, K]
         # Use unsqueeze
-        weights = self.backend.unsqueeze(weights, 0) # [1, K]
-        weights = self.backend.unsqueeze(weights, 0) # [1, 1, K]
+        weights = self.backend.unsqueeze(weights, 0)  # [1, K]
+        weights = self.backend.unsqueeze(weights, 0)  # [1, 1, K]
 
         # Calculate Hermite polynomials
-        out = self._eval_hermitenorm_batch(K - 1, x) # [K, B, D]
+        out = self._eval_hermitenorm_batch(K - 1, x)  # [K, B, D]
         
         # out = out.permute(1, 2, 0) # [B, D, K]
         out = self.backend.permute(out, (1, 2, 0))
@@ -154,12 +232,12 @@ class EngineSiamese:
         
         gaussian_factor = self.backend.unsqueeze(sqrt_val, -1)
         
-        out = weights * gaussian_factor * out # [B, D, K]
+        out = weights * gaussian_factor * out  # [B, D, K]
         
         # Calculate Mx
-        # Mx = out * out^T (outer product per qubit per batch)
-        # Mx = torch.einsum("bdk,bdl->bdkl", out, out)
-        Mx = self.backend.einsum("bdk,bdl->bdkl", out, out)
+        # 对于复数域，应该使用共轭内积：out_conj * out^T
+        # 使用 out.conj() 在实数 dtype 下也是 no-op。
+        Mx = self.backend.einsum("bdk,bdl->bdkl", out.conj(), out)
         
         # Split into list of Mx for each qubit
         # Mx_list = [Mx[:, i, :, :] for i in range(num_qubits)] # List of [B, K, K]
@@ -243,7 +321,7 @@ class EngineSiamese:
         cores_dict = {name: qctn.cores_weights[name] for name in qctn.cores}
 
         right_cores_dict = None
-        if right_qctn is not None:
+        if right_qctn is not None and isinstance(right_qctn, QCTN):
             right_cores_dict = {}
             for name in right_qctn.cores:
                 right_cores_dict[name] = right_qctn.cores_weights[name]
@@ -252,12 +330,22 @@ class EngineSiamese:
         result = compute_fn(cores_dict, circuit_states, measure_input, right_cores_dict=right_cores_dict)
         
         if isinstance(result, TNTensor):
+            
             # result.scale_to(1.0)
             if ret_type == 'TNTensor':
+                if self.backend.is_complex(result.tensor):
+                    result = TNTensor(self.backend.abs_square(result.tensor), result.scale, result.log_scale)
                 return result
             else:
+                result.scale_to(1.0)
+
+                if self.backend.is_complex(result.tensor):
+                    return self.backend.abs_square(result.tensor)
+
                 return result.tensor
         else:
+            if self.backend.is_complex(result):
+                result = self.backend.abs_square(result)
             return result
 
     def contract_with_compiled_strategy_for_gradient(self, qctn, circuit_states_list, measure_input_list, measure_is_matrix=True, right_qctn="symmetric") -> Tuple:
@@ -398,16 +486,14 @@ class EngineSiamese:
                 res_tensor = result
                 res_scale = 1.0
                 res_log_scale = 0.0
-            
-            # mse loss
-            # loss = self.backend.mean((res_tensor - 1.0) ** 2)
-            # return loss
 
+            # Born rule: 若为复数则转为实数概率 P = |ψ|^2
+            if self.backend.is_complex(res_tensor):
+                res_tensor = self.backend.abs_square(res_tensor)
 
-            # Compute Cross Entropy loss
-            # Target is all ones (maximizing probability)
+            # Compute Cross Entropy loss; target 全 1（最大化概率）
             target = self.backend.ones(res_tensor.shape, dtype=res_tensor.dtype)
-            
+
             # Avoid log(0)
             res_tensor = self.backend.clamp(res_tensor, min=1e-10)
             log_result = self.backend.log(res_tensor)
@@ -441,8 +527,6 @@ class EngineSiamese:
 
             log_total = log_result + log_scale
 
-            # log_total = log_result
-            
             return -self.backend.mean(target * log_total)
         
         # Compute gradients
@@ -668,6 +752,9 @@ class EngineSiamese:
         Returns:
             samples: Tensor of shape (num_samples, nqubits) containing sampled values (continuous).
         """
+        print(f"qctn cores_weights: {qctn.cores_weights['a']}")
+        # print(f"qctn cores_weights: {qctn.cores_weights['a'].tensor}")
+        # print(f"qctn scale: {qctn.cores_weights['a'].scale}")
         
         # 1. Prepare Grid and Basis
         x_min, x_max = bounds
@@ -702,6 +789,12 @@ class EngineSiamese:
             grid_x_input = self.backend.unsqueeze(grid_x, 1) # (G, 1)
             mx_list_grid, _ = self.generate_data(grid_x_input, K=K)
             Mx_grid = mx_list_grid[0] # (G, K, K)
+
+            print(f"q_idx: {q_idx}")
+            print(f"Mx_grid: {Mx_grid.shape}")
+            print(f"Mx_grid: {Mx_grid[0, :, :]}")
+            print(f"Mx_grid: {Mx_grid[1, :, :]}")
+            
 
             # Step B: Prepare Temporary Measurements
             temp_measure_list = []
@@ -741,10 +834,11 @@ class EngineSiamese:
     
             print(f"[EngineSiamese.sample] Sampling qubit {q_idx+1}/{qctn.nqubits}...")
             print(f"  Contracting with batch size: {num_samples * grid_size}...")
-            print(f". Temp input list shape: {[x.shape for x in temp_input_list]}")
-            print(f". Temp measure shape: {[x.shape for x in temp_measure_list]}")
-            
+            # print(f". Temp input list shape: {[x.shape for x in temp_input_list]}")
+            # print(f". Temp measure shape: {[x.shape for x in temp_measure_list]}")
 
+            # print(f". Temp measure: {temp_measure_list}")
+            
             results = self.contract_with_compiled_strategy(
                  qctn,
                  circuit_states_list=temp_input_list,
@@ -755,17 +849,40 @@ class EngineSiamese:
             if isinstance(results, TNTensor):
                 results = results.tensor
                 
+            # print(f"results: {results.shape} {results}")
+
             # Step E: CDF & Sample
             density = self.backend.reshape(results, (num_samples, grid_size))
-            density = self.backend.real(density)
+            # density = self.backend.real(density)
+            density = self.backend.abs_square(density)
+            
+            # print(f"density: {density.shape} {density}")
+
             density = self.backend.clamp(density, min=0.0)
             
             cdf = self.backend.cumsum(density, dim=1)
+            
+            # print(f"cdf: {cdf.shape} {cdf}")
+
             total_sum = self.backend.unsqueeze(cdf[:, -1], 1)
+            
+            # print(f"total_sum: {total_sum.shape} {total_sum}")
+
             cdf = cdf / (total_sum + 1e-10) # (S, G)
             
-            u = self.backend.rand((num_samples, 1))
+            # print(f"rescale cdf: {cdf.shape} {cdf}")
+
+            u = self.backend.rand((num_samples, 1), dtype=self.backend.torch.float32)
+
+            # print(f"u: {u.shape} {u}")
+
+            # 逆 CDF 采样需要实数比较，复数 backend 时 u 取实部
+            # if self.backend.is_complex(u):
+            #     u = self.backend.abs_square(u)
+            # self.backend.real(u)
             
+            # print(f"u: {u.shape} {u}")
+
             mask = (cdf < u).float()
             indices = self.backend.sum(mask, dim=1).long() # (S,)
             indices = self.backend.clamp(indices, max=grid_size - 2)
@@ -787,6 +904,8 @@ class EngineSiamese:
             
             samples[:, q_idx] = self.backend.squeeze(sampled_y, 1)
             
+            print(f"sampled_y: {sampled_y.shape} {sampled_y}")
+
             # Step F: Update Persistent Measure
             mx_list_y, _ = self.generate_data(sampled_y, K=K)
             Mx_y = mx_list_y[0] # (S, K, K)

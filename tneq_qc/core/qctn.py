@@ -754,10 +754,10 @@ class QCTN:
             full_shape = input_shape + output_shape
             core = self.backend.reshape(core, full_shape)
 
+            self.cores_weights[core_name] = core
+            # self.cores_weights[core_name] = TNTensor(core)
             # self.cores_weights[core_name] = core
-            self.cores_weights[core_name] = TNTensor(core)
-            # self.cores_weights[core_name] = core
-            self.cores_weights[core_name].auto_scale()
+            # self.cores_weights[core_name].auto_scale()
 
     def save_cores(self, file_path: Union[str, Path], metadata: Optional[Mapping[str, str]] = None):
         """Save all core tensors into a safetensors file."""
@@ -773,9 +773,14 @@ class QCTN:
         tensor_dict = {}
         for core_name, tensor in self.cores_weights.items():
             if isinstance(tensor, TNTensor):
-                tensor_dict[f"core_{core_name}"] = self.backend.tensor_to_numpy(tensor.tensor * tensor.scale)
+                arr = self.backend.tensor_to_numpy(tensor.tensor * tensor.scale)
             else:
-                tensor_dict[f"core_{core_name}"] = self.backend.tensor_to_numpy(tensor)
+                arr = self.backend.tensor_to_numpy(tensor)
+            if np.iscomplexobj(arr):
+                tensor_dict[f"core_{core_name}_real"] = np.ascontiguousarray(arr.real)
+                tensor_dict[f"core_{core_name}_imag"] = np.ascontiguousarray(arr.imag)
+            else:
+                tensor_dict[f"core_{core_name}"] = np.ascontiguousarray(arr)
 
         metadata_dict = {} if metadata is None else {str(k): str(v) for k, v in metadata.items()}
         save_file(tensor_dict, str(file_path), metadata=metadata_dict)
@@ -800,16 +805,19 @@ class QCTN:
 
         for core_name in self.cores:
             key = f"core_{core_name}"
-            if key not in tensor_dict:
+            key_real, key_imag = f"core_{core_name}_real", f"core_{core_name}_imag"
+            if key_real in tensor_dict:
+                array = tensor_dict[key_real] + 1j * tensor_dict[key_imag]
+            elif key in tensor_dict:
+                array = tensor_dict[key]
+            else:
                 if strict:
                     raise KeyError(f"Missing tensor for core {core_name} in {file_path}")
                 continue
-            array = tensor_dict[key]
             tensor = self.backend.convert_to_tensor(array)
             tn_tensor = TNTensor(tensor)
             tn_tensor.auto_scale()
             self.cores_weights[core_name] = tn_tensor
-            # self.cores_weights[core_name] = tensor
 
         metadata_dict = {str(k): str(v) for k, v in metadata.items()}
         self._loaded_metadata = metadata_dict

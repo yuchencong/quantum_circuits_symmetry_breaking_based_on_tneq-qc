@@ -948,9 +948,14 @@ def _contract_symmetric_group(
 
         # tmp = result_tensor.tensor.abs().max()
         
-        result_tensor.auto_scale()
+        # result_tensor.auto_scale()
     else:
         result_tensor = torch.einsum(einsum_eq, *tensor_list)
+
+        # print(f"torch einsum einsum_eq: {einsum_eq}")
+        # for tt in tensor_list:
+        #     print(f"tt: {tt.shape} {tt}")
+        # print(f"result_tensor: {result_tensor.shape} {result_tensor}")
 
     # print(f"  Result shape: {result_tensor.shape}")
     

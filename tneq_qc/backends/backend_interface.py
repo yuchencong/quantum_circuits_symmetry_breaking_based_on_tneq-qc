@@ -20,7 +20,8 @@ class BackendInfo:
     should be implemented in the caller based on this information.
     """
     
-    def __init__(self, backend_type: str, device: Optional[str] = None, **kwargs):
+    def __init__(self, backend_type: str, device: Optional[str] = None,
+                 dtype: Optional[str] = None, **kwargs):
         """
         Initialize backend information.
         
@@ -31,10 +32,15 @@ class BackendInfo:
         """
         self.backend_type = backend_type.lower()
         self.device = device
+        # 逻辑上的默认 dtype（例如 'float32', 'complex64' 等），由具体 backend 解释
+        self.dtype = dtype
         self.config = kwargs
     
     def __repr__(self):
-        return f"BackendInfo(backend_type='{self.backend_type}', device='{self.device}', config={self.config})"
+        return (
+            f"BackendInfo(backend_type='{self.backend_type}', "
+            f"device='{self.device}', dtype='{self.dtype}', config={self.config})"
+        )
     
     def __str__(self):
         return self.__repr__()
@@ -424,3 +430,14 @@ class ComputeBackend(ABC):
             Squeezed tensor.
         """
         pass
+
+    def is_complex(self, tensor) -> bool:
+        """Return True if tensor is complex dtype. Default: False (e.g. backends without complex)."""
+        return False
+
+    def abs_square(self, tensor):
+        """
+        Born rule: for complex tensor return |tensor|^2 (real); for real tensor return as-is.
+        Default: return tensor (no-op for real-only backends).
+        """
+        return tensor
