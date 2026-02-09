@@ -2,8 +2,11 @@ from __future__ import annotations
 from ..config import Configuration
 import itertools
 import opt_einsum
-import jax
-import jax.numpy as jnp
+try:
+    import jax
+    import jax.numpy as jnp
+except Exception as e:
+    jax = None
 
 local_debug = True
 

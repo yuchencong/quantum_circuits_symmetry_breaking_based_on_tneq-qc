@@ -507,7 +507,7 @@ class QCTN:
         # 把self.cores按照在full_cores的相对顺序排序
         self.cores.sort(key=lambda x: core2idx[x])
 
-        print(f"num cores: {len(self.cores)}")
+        # print(f"num cores: {len(self.cores)}")
 
 
         # self.cores = [opt_einsum.get_symbol(i) for i in range(self.nqubits-1)]

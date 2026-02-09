@@ -91,20 +91,20 @@ class StrategyCompiler:
         # Iterate over all candidate strategies
         for name in strategy_names:
             if name not in self._strategies:
-                print(f"  [{name}] Strategy not registered, skipping...")
+                # print(f"  [{name}] Strategy not registered, skipping...")
                 continue
                 
             strategy = self._strategies[name]
             
             is_compatible = strategy.check_compatibility(qctn, shapes_info)
-            print(f"  [{name}] Compatibility: {is_compatible}")
+            # print(f"  [{name}] Compatibility: {is_compatible}")
             
             if not is_compatible:
                 continue
             
             # Estimate cost
             cost = strategy.estimate_cost(qctn, shapes_info)
-            print(f"  [{name}] Estimated cost: {cost:.2e} FLOPs")
+            # print(f"  [{name}] Estimated cost: {cost:.2e} FLOPs")
             
             # Generate computation function
             compute_fn = strategy.get_compute_function(qctn, shapes_info, backend, **kwargs)

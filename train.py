@@ -60,7 +60,7 @@ if __name__ == "__main__":
     # qctn = QCTN(qctn_graph, backend=engine.backend)
 
     qctn = QCTN.from_pretrained(qctn_graph, "assets/qctn_cores_3qubitswall_dist_00.safetensors", backend=engine.backend)
-    # pretrained_qctn = QCTN.from_pretrained(qctn_graph, "assets/qctn_cores_3qubitswall_dist_00.safetensors", backend=engine.backend)
+    pretrained_qctn = QCTN.from_pretrained(qctn_graph, "assets/qctn_cores_3qubitswall_dist_00.safetensors", backend=engine.backend)
     right_qctn = QCTN(qctn_graph, backend=engine.backend)
     N = 1
     # B = 1024
@@ -107,13 +107,14 @@ if __name__ == "__main__":
         print(f"pretrained core {c_name} requires_grad: {requires_grad}")
         
 
-    # pretrained_result = engine.contract_with_compiled_strategy(
-    #     qctn,
-    #     circuit_states_list=None,
-    #     measure_input_list=data_list_for_optim[0]["measure_input_list"],
-    #     right_qctn=pretrained_qctn,
-    # )
-    # print(f"Pretrained Result (std graph): {pretrained_result.shape}")
+    pretrained_result = engine.contract_with_compiled_strategy(
+        qctn,
+        circuit_states_list=None,
+        measure_input_list=data_list_for_optim[0]["measure_input_list"],
+        right_qctn=pretrained_qctn,
+    )
+    print(f"Pretrained Result (std graph): {pretrained_result.shape}")
+    import pdb; pdb.set_trace()
     # exit()
 
     # Define step-based learning rate schedule
