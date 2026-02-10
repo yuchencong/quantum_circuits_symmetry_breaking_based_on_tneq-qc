@@ -9,7 +9,7 @@ import random
 import string
 from typing import List, Tuple, Optional
 import re
-
+import opt_einsum
 
 class TNGraph:
     """
@@ -48,6 +48,8 @@ class TNGraph:
         # graph[i] = [(tensor_name, left_bond, right_bond), ...]
         self.graph: List[List[Tuple[str, int, int]]] = []
         
+        self.full_cores = set([opt_einsum.get_symbol(i) for i in range(10000)])
+
         if graph_string:
             self.from_string(graph_string)
         else:

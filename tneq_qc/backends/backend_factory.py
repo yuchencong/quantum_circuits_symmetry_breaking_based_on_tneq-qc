@@ -31,13 +31,17 @@ class BackendFactory:
     _backend_instance: Optional[ComputeBackend] = None
 
     @classmethod
-    def create_backend(cls, backend_name: str, device: Optional[str] = None, **kwargs) -> ComputeBackend:
+    def create_backend(cls, backend_name: str, device: Optional[str] = None,
+                       tensor_type: Optional[str] = None, **kwargs) -> ComputeBackend:
         """
         Create a backend instance.
         
         Args:
             backend_name (str): Name of the backend ('jax' or 'pytorch').
             device (Optional[str]): Device specification.
+            tensor_type (Optional[str]): High-level tensor wrapper type.
+                Pass ``"TNTensor"`` so that :meth:`init_random_core` returns
+                :class:`TNTensor` and :meth:`get_tensor_type` reports it.
             **kwargs: Additional backend-specific configuration.
         
         Returns:
@@ -54,20 +58,23 @@ class BackendFactory:
                 f"Available backends: {list(cls._backends.keys())}"
             )
 
-        return cls._backends[backend_name](device=device, **kwargs)
+        return cls._backends[backend_name](device=device, tensor_type=tensor_type, **kwargs)
 
     @classmethod
-    def set_default_backend(cls, backend_name: str, device: Optional[str] = None, **kwargs):
+    def set_default_backend(cls, backend_name: str, device: Optional[str] = None,
+                            tensor_type: Optional[str] = None, **kwargs):
         """
         Set the default backend for the application.
         
         Args:
             backend_name (str): Name of the backend ('jax' or 'pytorch').
             device (Optional[str]): Device specification.
+            tensor_type (Optional[str]): High-level tensor wrapper type.
             **kwargs: Additional backend-specific configuration.
         """
         cls._default_backend = backend_name.lower()
-        cls._backend_instance = cls.create_backend(backend_name, device=device, **kwargs)
+        cls._backend_instance = cls.create_backend(backend_name, device=device,
+                                                   tensor_type=tensor_type, **kwargs)
 
     @classmethod
     def get_default_backend(cls) -> ComputeBackend:

@@ -13,7 +13,8 @@ from .backend_interface import ComputeBackend, BackendInfo
 class BackendPyTorch(ComputeBackend):
     """PyTorch computational backend."""
 
-    def __init__(self, device: Optional[str] = None, dtype: Optional[Any] = None):
+    def __init__(self, device: Optional[str] = None, dtype: Optional[Any] = None,
+                 tensor_type: Optional[str] = None):
         """
         Initialize PyTorch backend.
         
@@ -22,8 +23,12 @@ class BackendPyTorch(ComputeBackend):
                 If None, automatically selects 'cuda' if available, otherwise 'cpu'.
             dtype (Optional[Any]): Default dtype for tensors. Can be a torch.dtype
                 or a string like 'float32', 'float64', 'complex64', 'complex128', 'complex'.
+            tensor_type (Optional[str]): High-level tensor wrapper type.
+                Pass ``"TNTensor"`` to have :meth:`init_random_core` return
+                :class:`TNTensor` instances and :meth:`get_tensor_type` report
+                ``TNTensor``.
         """
-        super().__init__()
+        super().__init__(tensor_type=tensor_type)
         try:
             import torch
             self.torch = torch
@@ -487,9 +492,9 @@ class BackendPyTorch(ComputeBackend):
         # 如果默认 dtype 是复数，则将实数正交矩阵提升到复数 dtype
         if self.torch.is_complex(self.torch.zeros(1, dtype=self.default_dtype)):
             Q = Q.to(self.default_dtype)
-        return Q.reshape(shape)
+        return self.wrap_tensor(Q.reshape(shape))
 
-    def get_tensor_type(self):
+    def _get_raw_tensor_type(self):
         return self.torch.Tensor
 
     def set_random_seed(self, seed: int):

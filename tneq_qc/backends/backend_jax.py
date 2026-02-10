@@ -12,7 +12,8 @@ from .backend_interface import ComputeBackend, BackendInfo
 class BackendJAX(ComputeBackend):
     """JAX computational backend."""
 
-    def __init__(self, device: Optional[str] = None, dtype: Optional[Any] = None):
+    def __init__(self, device: Optional[str] = None, dtype: Optional[Any] = None,
+                 tensor_type: Optional[str] = None):
         """
         Initialize backend JAX.
         
@@ -21,8 +22,12 @@ class BackendJAX(ComputeBackend):
                 If None, automatically detects available devices.
             dtype (Optional[Any]): Default dtype for tensors. Can be a jnp.dtype
                 or a string like 'float32', 'float64', 'complex64', 'complex128', 'complex'.
+            tensor_type (Optional[str]): High-level tensor wrapper type.
+                Pass ``"TNTensor"`` to have :meth:`init_random_core` return
+                :class:`TNTensor` instances and :meth:`get_tensor_type` report
+                ``TNTensor``.
         """
-        super().__init__()
+        super().__init__(tensor_type=tensor_type)
         try:
             import jax
             import jax.numpy as jnp
@@ -200,9 +205,9 @@ class BackendJAX(ComputeBackend):
         d = self.jnp.diag(R)
         sign_correction = self.jnp.sign(d)
         Q = Q * sign_correction[None, :] # unsqueeze(0) equivalent
-        return Q.reshape(shape)
+        return self.wrap_tensor(Q.reshape(shape))
 
-    def get_tensor_type(self):
+    def _get_raw_tensor_type(self):
         return self.jnp.ndarray
 
     def set_random_seed(self, seed: int):
@@ -353,3 +358,7 @@ class BackendJAX(ComputeBackend):
         if dim is None:
             return self.jnp.squeeze(tensor)
         return self.jnp.squeeze(tensor, axis=dim)
+
+    def einsum(self, equation, *operands):
+        """Perform Einstein summation convention contraction."""
+        return self.jnp.einsum(equation, *operands)

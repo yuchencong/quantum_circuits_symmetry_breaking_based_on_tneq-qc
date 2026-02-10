@@ -53,9 +53,51 @@ class ComputeBackend(ABC):
     gradient computation, and JIT compilation.
     """
     
-    def __init__(self):
-        """Initialize backend with BackendInfo."""
+    def __init__(self, tensor_type: Optional[str] = None):
+        """Initialize backend with BackendInfo.
+
+        Args:
+            tensor_type: Optional string indicating the high-level tensor
+                wrapper to use.  Currently supported: ``"TNTensor"``.
+                When set, :meth:`get_tensor_type` returns the wrapper class
+                and :meth:`init_random_core` automatically wraps results.
+        """
         self.backend_info: Optional[BackendInfo] = None
+        self._tensor_type_name: Optional[str] = tensor_type
+
+    # ------------------------------------------------------------------
+    # TNTensor helpers
+    # ------------------------------------------------------------------
+
+    @property
+    def use_tn_tensor(self) -> bool:
+        """Return ``True`` if the backend is configured to use TNTensor."""
+        return self._tensor_type_name == "TNTensor"
+
+    def wrap_tensor(self, tensor):
+        """Wrap a raw backend tensor in :class:`TNTensor` if configured.
+
+        If the backend's ``tensor_type`` is ``"TNTensor"`` and *tensor* is
+        not already a :class:`TNTensor`, it is wrapped.  Otherwise the
+        tensor is returned as-is.
+        """
+        if self.use_tn_tensor:
+            from ..core.tn_tensor import TNTensor
+            if isinstance(tensor, TNTensor):
+                return tensor
+            return TNTensor(tensor)
+        return tensor
+
+    def unwrap_tensor(self, tensor):
+        """Extract the raw backend tensor from a :class:`TNTensor`.
+
+        If *tensor* is a :class:`TNTensor`, returns its underlying
+        ``.tensor``; otherwise returns *tensor* unchanged.
+        """
+        from ..core.tn_tensor import TNTensor
+        if isinstance(tensor, TNTensor):
+            return tensor.tensor
+        return tensor
 
     @abstractmethod
     def execute_expression(self, expression, *tensors):
@@ -172,13 +214,32 @@ class ComputeBackend(ABC):
         """
         pass
 
-    @abstractmethod
     def get_tensor_type(self):
         """
         Get the type of tensors used by this backend.
-        
+
+        When ``tensor_type="TNTensor"`` was passed at construction time,
+        this returns :class:`TNTensor`; otherwise it delegates to
+        :meth:`_get_raw_tensor_type`.
+
         Returns:
             Type/Class of the tensor.
+        """
+        if self.use_tn_tensor:
+            from ..core.tn_tensor import TNTensor
+            return TNTensor
+        return self._get_raw_tensor_type()
+
+    @abstractmethod
+    def _get_raw_tensor_type(self):
+        """
+        Get the raw (unwrapped) tensor type for this backend.
+
+        Subclasses must implement this to return the native tensor class
+        (e.g. ``torch.Tensor``, ``jnp.ndarray``).
+
+        Returns:
+            Type/Class of the raw backend tensor.
         """
         pass
 
@@ -428,6 +489,20 @@ class ComputeBackend(ABC):
             
         Returns:
             Squeezed tensor.
+        """
+        pass
+
+    @abstractmethod
+    def einsum(self, equation: str, *operands):
+        """
+        Perform Einstein summation convention contraction.
+
+        Args:
+            equation (str): The einsum equation string, e.g. ``'ij,jk->ik'``.
+            *operands: Input tensors referenced by the equation.
+
+        Returns:
+            Tensor result of the einsum contraction.
         """
         pass
 
