@@ -209,7 +209,8 @@ class GreedyStrategy(ContractionStrategy):
                     core_entry = {
                         'core_idx': uid,
                         'core_name': f"{core_info['core_name']}_R",
-                        'tensor_source': 'core',
+                        'tensor_source': 'transpose' ,
+                        # 'tensor': cores_dict[core_info['core_name']].conj(),
                         'tensor_key': core_info['core_name'],
                         'in_edge_list': new_in_edges,
                         'out_edge_list': new_out_edges,
@@ -673,6 +674,11 @@ def _get_tensor(entry: Dict, cores_dict, circuit_states, measure_matrices):
     
     if source == 'core':
         return cores_dict[key]
+    elif source == 'transpose':
+        if cores_dict[key].is_complex():
+            return cores_dict[key].conj()
+        else:
+            return cores_dict[key]
     elif source == 'circuit':
         return circuit_states[key]
     elif source == 'mx':
