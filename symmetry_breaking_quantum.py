@@ -197,8 +197,8 @@ def symmetry_breaking(IM: np.ndarray, target_tensor, backend, n_qubits, n_cores)
                 print("Can not emove all cores from this row... Continue")
                 continue
 
-            prune_graph_for_display = incidence_to_graph(IM, mask_list=candidate, for_display=True, keep_zeros=True, mask_char="█") # For display only
-            print("Now QCTN graph:\n" + prune_graph_for_display)
+            # prune_graph_for_display = incidence_to_graph(IM, mask_list=candidate, for_display=True, keep_zeros=True, mask_char="█") # For display only
+            # print("Now QCTN graph:\n" + prune_graph_for_display)
             graph = incidence_to_graph(cand_IM)
             train_qctn = QCTN(graph, backend=backend)
             einsum_eq, tensor_shapes = EinsumStrategy.build_core_only_expression(train_qctn)

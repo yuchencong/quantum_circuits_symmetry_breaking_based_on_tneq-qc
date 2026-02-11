@@ -13,8 +13,10 @@ import os
 
 is_data_loaded = False
 backend=BackendFactory.create_backend("pytorch", device="cpu")
-n_qubits = 8  # number of qubits
-n_cells = 5 # number of brick-wall unit cells
+# n_qubits = 8  # number of qubits
+# n_cells = 5 # number of brick-wall unit cells
+n_qubits = 4  # number of qubits
+n_cells = 3 # number of brick-wall unit cells
 n_cores = (n_qubits - 1) * n_cells  # number of cores
 data_size = 20
 
@@ -23,9 +25,9 @@ IM = build_brick_wall_IM(n_qubits, n_cells, rank=2)
 print("Incidence Matrix:\n", IM)
 # import pdb; pdb.set_trace()
 
-# target_mask_list = [2,3,5,8]
+target_mask_list = [2,3,5,8]
 # target_mask_list = [0,4,6,8]    # experiment for 4 qubits
-target_mask_list = [2,3,5,8,9,12,13,14,15,17,18,20,21,23,25,26,29,31,32,33]
+# target_mask_list = [2,3,5,8,9,12,13,14,15,17,18,20,21,23,25,26,29,31,32,33]     # experiment for 8 qubits
 
 
 # IM = np.array([[2, 0, 0, 2, 0, 0, 2, 0, 0, 2, 0, 0],
