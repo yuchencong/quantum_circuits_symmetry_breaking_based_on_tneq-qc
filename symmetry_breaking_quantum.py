@@ -2,25 +2,16 @@ import numpy as np
 import torch
 import opt_einsum as oe
 
-from tneq_qc.backends.backend_factory import BackendFactory
 from tneq_qc.core.qctn import QCTN
 from tneq_qc.contractor.einsum_strategy import EinsumStrategy
 
 import random
+import os
 
 
 
 # functions 
-def incidence_to_graph(
-    incidence: np.ndarray,
-    core_symbols=None,
-    mask_list=None,
-    *,
-    for_display: bool = False,
-    keep_zeros: bool = False,
-    mask_char: str = "█",
-    pad_dim = None,
-) -> str:
+def incidence_to_graph(incidence: np.ndarray, core_symbols=None, mask_list=None, *, for_display: bool = False, keep_zeros: bool = False, mask_char: str = "█", pad_dim = None) -> str:
     """
     Convert incidence matrix (rows=qubits, cols=cores) to QCTN graph string.
 
@@ -111,108 +102,128 @@ def incidence_to_graph(
 
 
 
-# 0) Prepare brick-wall structure graph and backend
-IM = np.array([[2, 0, 0, 2, 0, 0, 2, 0, 0, 2, 0, 0],
-               [2, 0, 2, 2, 0, 2, 2, 0, 2, 2, 0, 2],
-               [0, 2, 2, 0, 2, 2, 0, 2, 2, 0, 2, 2],
-               [0, 2, 0, 0, 2, 0, 0, 2, 0, 0, 2, 0]])
-n_qubits = IM.shape[0]  # number of qubits
-n_cores = IM.shape[1]
-backend = BackendFactory.create_backend("pytorch", device="cpu")
+# 0) Prepare brick-wall structure graph
+def build_brick_wall_IM(n_qubits, n_cells, rank=2):
+    n_cores = (n_qubits - 1) * n_cells
+    IM = np.zeros((n_qubits, n_cores), dtype=int)
+
+    for cell in range(n_cells):
+        base = cell * (n_qubits - 1)
+        col = 0
+        # even bonds: (0,1), (2,3), ...
+        for q in range(0, n_qubits - 1, 2):
+            IM[q, base + col] = rank
+            IM[q + 1, base + col] = rank
+            col += 1
+        # odd bonds: (1,2), (3,4), ...
+        for q in range(1, n_qubits - 1, 2):
+            IM[q, base + col] = rank
+            IM[q + 1, base + col] = rank
+            col += 1
+
+    return IM
 
 # 1) Target tensor (brick wall with random mask)
-target_mask_list = [2,3,5]
-mask_IM = IM.copy()
-for mask_idx in target_mask_list:
-    # print(f"Processing mask_index={mask_idx} ...")
-    if mask_idx >= n_cores:   # 注意用 >=，因为 index 最大是 n_cores-1
-        raise IndexError(
-            f"mask_index={mask_idx} out of range: 0 ~ {mask_idx-1}"
-        )
-    mask_IM[:, mask_idx] = 0 
+def target_tensor_init(IM: np.ndarray, n_cores, backend, target_mask_list):
+    mask_IM = IM.copy()
+    for mask_idx in target_mask_list:
+        # print(f"Processing mask_index={mask_idx} ...")
+        if mask_idx >= n_cores: 
+            raise IndexError(
+                f"mask_index={mask_idx} out of range: 0 ~ {mask_idx-1}"
+            )
+        mask_IM[:, mask_idx] = 0 
 
-target_graph = incidence_to_graph(mask_IM)  # For tensor generation
-# print("Target QCTN graph:\n" + target_graph)
-target_qctn = QCTN(target_graph,backend=backend)
-einsum_eq, tensor_shapes = EinsumStrategy.build_core_only_expression(target_qctn)
-expr = oe.contract_expression(einsum_eq, *tensor_shapes, optimize="auto")
-params = [target_qctn.cores_weights[c] for c in target_qctn.cores]
-target_tensor = expr(*params)
-target_tensor = target_tensor.detach()
+    target_graph = incidence_to_graph(mask_IM)  # For tensor generation
+    # print("Target QCTN graph:\n" + target_graph)
+    target_qctn = QCTN(target_graph,backend=backend)
+    einsum_eq, tensor_shapes = EinsumStrategy.build_core_only_expression(target_qctn)
+    expr = oe.contract_expression(einsum_eq, *tensor_shapes, optimize="auto")
+    params = [target_qctn.cores_weights[c] for c in target_qctn.cores]
+    target_tensor = expr(*params)
+    target_tensor = target_tensor.detach()
+    return target_tensor
 # print("Target tensor shape:", target_tensor.shape, target_tensor)
 
-# 2) Prepare for symmetric breaking
-pruned_list = []
-pruned_IM = IM.copy()
-prune_list = list(range(n_cores))
-# 3) Strat symmetric breaking
-for i in range(max_iterations:=50):
-    if len(pruned_list) == len(prune_list):
-        print("All cores have been pruned.")
-        break
-    random.shuffle(prune_list)
-    for idx in prune_list:
-        print(f"Trying to prune core index={idx} ...")
-        if idx in pruned_list:
-            continue
-        candidate = pruned_list + [idx]
-        cand_IM = IM.copy()
-        cand_IM[:, candidate] = 0
-
-        prune_graph_for_display = incidence_to_graph(IM, mask_list=candidate, for_display=True, keep_zeros=True, mask_char="█") # For display only
-        print("Now QCTN graph:\n" + prune_graph_for_display)
-        for pruned_idx in pruned_list:
-            pruned_IM[:, pruned_idx] = 0
-        graph = incidence_to_graph(pruned_IM)
-        train_qctn = QCTN(graph, backend=backend)
-        einsum_eq, tensor_shapes = EinsumStrategy.build_core_only_expression(train_qctn)
-        expr = oe.contract_expression(einsum_eq, *tensor_shapes, optimize="auto")
-        params = [torch.nn.Parameter(train_qctn.cores_weights[c]) for c in train_qctn.cores]
-
-        opt = torch.optim.Adam(params, lr=1e-2)
+# 2) Validate target tensor
+def validate_target_tensor(target_tensor, IM: np.ndarray, backend, n_qubits,n_cores, idx):
+    validate_qctn = QCTN(incidence_to_graph(IM), backend=backend)
+    validate_flag = False
+    einsum_eq, tensor_shapes = EinsumStrategy.build_core_only_expression(validate_qctn)
+    expr = oe.contract_expression(einsum_eq, *tensor_shapes, optimize="auto")
+    params = [torch.nn.Parameter(validate_qctn.cores_weights[c]) for c in validate_qctn.cores]
+    opt = torch.optim.Adam(params, lr=1e-2)
+    for i in range(1000):
+        opt.zero_grad()
         out = expr(*params)
-        # try to fit target tensor
+        loss = ((out - target_tensor) ** 2).mean()
+        loss.backward()
+        opt.step()
+        fidelity = (2**n_qubits -2 ** (2*n_qubits-1) *loss)/2**n_qubits
+        # print(f"Validation Fidelity after step {i}: {fidelity}")
+        if 1-fidelity < 1e-3:
+            validate_flag = True
+            print(f"Validation successful, fidelity={fidelity}")
+            torch.save(target_tensor, os.path.join(os.path.dirname(__file__), "data", f"nqubit_{n_qubits}_ncore_{n_cores}_{idx}.pt"))
+            break
+    return validate_flag
+
+
+# 3) Prepare for symmetry breaking
+
+
+# 4) Start symmetry breaking
+def symmetry_breaking(IM: np.ndarray, target_tensor, backend, n_qubits, n_cores):
+    pruned_list = []
+    prune_count = 0
+    pruned_IM = IM.copy()
+    prune_list = list(range(n_cores))
+    for i in range(max_iterations:=500):
         pruned_flag = False
-        for i in range(500):
-            opt.zero_grad()
-            out = expr(*params)
-            loss = ((out - target_tensor) ** 2).mean()
-            loss.backward()
-            opt.step()
-            # if i % 10 == 0:
-            #     print(i, float(loss))
-            fidelity = (2**n_qubits -2 ** (2*n_qubits-1) *loss)/2**n_qubits
-            # print(f"Fidelity after step {i}: {fidelity}")
-            if 1-fidelity < 1e-4:
-                pruned_flag = True
-                print(f"Successfully pruned core index={idx} , fidelity={fidelity}")
-                pruned_list = candidate
-                break
-        # if not pruned_flag:
-        #     pruned_list.pop()
-                
-# backend = BackendFactory.create_backend("pytorch", device="cuda")
-# qctn = QCTN(graph, backend=backend)
-# einsum_eq, tensor_shapes = EinsumStrategy.build_core_only_expression(qctn)
-# expr = oe.contract_expression(einsum_eq, *tensor_shapes, optimize="auto")
+        print(f"=== Symmetry Breaking Iteration {i} ===")
+        if len(pruned_list) == len(prune_list):
+            print("All cores have been pruned.")
+            break
+        random.shuffle(prune_list)
+        for idx in prune_list:
+            print(f"Trying to prune core index={idx} ...")
+            prune_count += 1
+            if idx in pruned_list:
+                continue
+            candidate = pruned_list + [idx]
+            cand_IM = IM.copy()
+            cand_IM[:, candidate] = 0
+            if ((cand_IM > 0).sum(axis=1) == 0).any():
+                print("Can not emove all cores from this row... Continue")
+                continue
 
-# 4) Prepare torch params
-# for c in qctn.cores:
-#     print(c, type(qctn.cores_weights[c]))
+            prune_graph_for_display = incidence_to_graph(IM, mask_list=candidate, for_display=True, keep_zeros=True, mask_char="█") # For display only
+            print("Now QCTN graph:\n" + prune_graph_for_display)
+            graph = incidence_to_graph(cand_IM)
+            train_qctn = QCTN(graph, backend=backend)
+            einsum_eq, tensor_shapes = EinsumStrategy.build_core_only_expression(train_qctn)
+            expr = oe.contract_expression(einsum_eq, *tensor_shapes, optimize="auto")
+            params = [torch.nn.Parameter(train_qctn.cores_weights[c]) for c in train_qctn.cores]
 
-# params = [torch.nn.Parameter(qctn.cores_weights[c].tensor) for c in qctn.cores]
-# params = [torch.nn.Parameter(qctn.cores_weights[c]) for c in qctn.cores]
-# device = backend.backend_info.device
-# target = torch.from_numpy(T).float().to(device)
-
-
-# 5) Fit cores to target
-
-
-
-original_graph_for_display = incidence_to_graph(IM, for_display=True, keep_zeros=True, mask_char="█") # For display only
-print("Original QCTN graph:\n" + original_graph_for_display)
-target_graph_for_display = incidence_to_graph(IM, mask_list=target_mask_list, for_display=True, keep_zeros=True, mask_char="█") # For display only
-print("Target QCTN graph:\n" + target_graph_for_display)
-pruned_graph_for_display = incidence_to_graph(IM, mask_list=pruned_list, for_display=True, keep_zeros=True, mask_char="█") # For display only
-print("Pruned QCTN graph:\n" + pruned_graph_for_display)
+            opt = torch.optim.Adam(params, lr=1e-2)
+            # out = expr(*params)
+            # try to fit target tensor
+            for i in range(2000):
+                opt.zero_grad()
+                out = expr(*params)
+                loss = ((out - target_tensor) ** 2).mean()
+                loss.backward()
+                opt.step()
+                # if i % 10 == 0:
+                #     print(i, float(loss))
+                fidelity = (2**n_qubits -2 ** (2*n_qubits-1) *loss)/2**n_qubits
+                # print(f"Fidelity after step {i}: {fidelity}")
+                if 1-fidelity < 1e-3:
+                    pruned_flag = True
+                    print(f"Successfully pruned core index={idx} , fidelity={fidelity}")
+                    pruned_list = candidate
+                    break
+        if not pruned_flag:
+            print("No more cores can be pruned.")
+            break
+    return pruned_list, prune_count
