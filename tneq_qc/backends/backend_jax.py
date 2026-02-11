@@ -12,32 +12,92 @@ from .backend_interface import ComputeBackend, BackendInfo
 class BackendJAX(ComputeBackend):
     """JAX computational backend."""
 
-    def __init__(self, device: Optional[str] = None):
+    def __init__(self, device: Optional[str] = None, dtype: Optional[Any] = None,
+                 tensor_type: Optional[str] = None):
         """
         Initialize backend JAX.
         
         Args:
             device (Optional[str]): Device specification ('cpu', 'gpu', etc.).
                 If None, automatically detects available devices.
+            dtype (Optional[Any]): Default dtype for tensors. Can be a jnp.dtype
+                or a string like 'float32', 'float64', 'complex64', 'complex128', 'complex'.
+            tensor_type (Optional[str]): High-level tensor wrapper type.
+                Pass ``"TNTensor"`` to have :meth:`init_random_core` return
+                :class:`TNTensor` instances and :meth:`get_tensor_type` report
+                ``TNTensor``.
         """
-        super().__init__()
+        super().__init__(tensor_type=tensor_type)
         try:
             import jax
             import jax.numpy as jnp
             self.jax = jax
             self.jnp = jnp
-            
+
             # Auto-detect device if not specified
             if device is None:
                 device = 'gpu' if jax.devices('gpu') else 'cpu'
+
+            # Resolve and store default dtype
+            self.default_dtype = self._resolve_default_dtype(dtype)
             
             # Create BackendInfo
-            self.backend_info = BackendInfo('jax', device=device)
+            self.backend_info = BackendInfo(
+                'jax',
+                device=device,
+                dtype=self._dtype_to_string(self.default_dtype),
+            )
             
             # Initialize PRNG key
             self.key = self.jax.random.PRNGKey(0)
         except ImportError:
             raise ImportError("JAX is not installed. Please install it with: pip install jax jaxlib")
+
+    def _resolve_default_dtype(self, dtype: Optional[Any]):
+        """
+        将用户提供的 dtype 解析为 jnp.dtype。
+
+        支持：
+        - None: 使用 jnp.float32
+        - 字符串: 'float32', 'float64', 'complex64', 'complex128', 'complex'
+        - 直接传入 jnp.dtype
+        """
+        jnp = self.jnp
+        if dtype is None:
+            return jnp.float32
+
+        if isinstance(dtype, str):
+            mapping = {
+                'float32': jnp.float32,
+                'float64': jnp.float64,
+                'complex64': jnp.complex64,
+                'complex128': jnp.complex128,
+                # 允许简写 'complex'，默认 complex64
+                'complex': jnp.complex64,
+            }
+            if dtype not in mapping:
+                raise ValueError(
+                    f"Unsupported dtype string '{dtype}' for BackendJAX. "
+                    f"Supported: {list(mapping.keys())}"
+                )
+            return mapping[dtype]
+
+        # 假设已经是 jnp.dtype
+        return dtype
+
+    def _dtype_to_string(self, dtype: Any) -> str:
+        """将 jnp.dtype 转成逻辑上的字符串表示，便于在 BackendInfo 中记录。"""
+        jnp = self.jnp
+        mapping = {
+            jnp.float32: 'float32',
+            jnp.float64: 'float64',
+            getattr(jnp, 'complex64', None): 'complex64',
+            getattr(jnp, 'complex128', None): 'complex128',
+        }
+        for k, v in mapping.items():
+            if k is not None and dtype == k:
+                return v
+        return str(dtype)
 
     def execute_expression(self, expression, *tensors):
         """Execute contraction expression using JAX."""
@@ -54,10 +114,11 @@ class BackendJAX(ComputeBackend):
     def convert_to_tensor(self, array):
         """Convert to JAX array."""
         if isinstance(array, self.jnp.ndarray):
+            # JAX 里 dtype 不强制转换，保持原有 dtype；如果需要可以在外层手动 cast
             return array
         
         # Convert based on backend_info
-        tensor = self.jnp.array(array)
+        tensor = self.jnp.array(array, dtype=self.default_dtype)
         
         # Device placement if GPU
         if self.backend_info.device and 'gpu' in self.backend_info.device.lower():
@@ -144,9 +205,9 @@ class BackendJAX(ComputeBackend):
         d = self.jnp.diag(R)
         sign_correction = self.jnp.sign(d)
         Q = Q * sign_correction[None, :] # unsqueeze(0) equivalent
-        return Q.reshape(shape)
+        return self.wrap_tensor(Q.reshape(shape))
 
-    def get_tensor_type(self):
+    def _get_raw_tensor_type(self):
         return self.jnp.ndarray
 
     def set_random_seed(self, seed: int):
@@ -163,7 +224,7 @@ class BackendJAX(ComputeBackend):
     def eye(self, n: int, dtype=None):
         """Create an identity matrix of size n x n."""
         if dtype is None:
-            dtype = self.jnp.float32
+            dtype = self.default_dtype
         
         tensor = self.jnp.eye(n, dtype=dtype)
         
@@ -178,7 +239,7 @@ class BackendJAX(ComputeBackend):
     def zeros(self, shape, dtype=None):
         """Create a tensor filled with zeros."""
         if dtype is None:
-            dtype = self.jnp.float32
+            dtype = self.default_dtype
         
         tensor = self.jnp.zeros(shape, dtype=dtype)
         
@@ -193,7 +254,7 @@ class BackendJAX(ComputeBackend):
     def ones(self, shape, dtype=None):
         """Create a tensor filled with ones."""
         if dtype is None:
-            dtype = self.jnp.float32
+            dtype = self.default_dtype
         
         tensor = self.jnp.ones(shape, dtype=dtype)
         
@@ -297,3 +358,7 @@ class BackendJAX(ComputeBackend):
         if dim is None:
             return self.jnp.squeeze(tensor)
         return self.jnp.squeeze(tensor, axis=dim)
+
+    def einsum(self, equation, *operands):
+        """Perform Einstein summation convention contraction."""
+        return self.jnp.einsum(equation, *operands)

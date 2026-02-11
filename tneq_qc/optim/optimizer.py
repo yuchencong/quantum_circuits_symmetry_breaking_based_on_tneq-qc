@@ -71,6 +71,12 @@ class Optimizer:
         Returns:
             None: The function modifies the qctn in place.
         """
+        # eval_fn = getattr(self, "eval_fn", None)
+        # metrics = eval_fn(self.iter + 1, qctn)
+        # print(f"Iteration {self.iter}: metrics: {metrics}")
+
+        # exit()
+
         while self.iter < self.max_iter:
             # TODO: impl general function named contract_for_gradient
             data_index = self.iter % len(data_list)
@@ -81,7 +87,16 @@ class Optimizer:
             # Convert loss to scalar for comparison and printing
             loss_value = float(loss) if hasattr(loss, 'item') else loss
             self._apply_lr_schedule()
-            
+
+            # Optional: log training loss to TensorBoard
+            summary_writer = getattr(self, "summary_writer", None)
+            if summary_writer is not None:
+                try:
+                    summary_writer.add_scalar("train/loss", loss_value, self.iter)
+                except Exception:
+                    # 防止外部 writer 出错中止训练
+                    pass
+
             if self.tol and loss_value < self.tol:
                 print(f"Convergence achieved at iteration {self.iter} with loss {loss_value}.")
                 break
@@ -89,6 +104,38 @@ class Optimizer:
             print(f"Iteration {self.iter}: loss = {loss_value} lr = {self.learning_rate}")
 
             self.step(qctn, grads)
+
+            # Step-based evaluation hook
+            eval_every = getattr(self, "eval_every", 0)
+            eval_fn = getattr(self, "eval_fn", None)
+            if eval_every and eval_fn is not None and ((self.iter + 1) % eval_every == 0):
+                try:
+                    metrics = eval_fn(self.iter + 1, qctn)
+                except Exception as e:
+                    print(f"[Optimizer] Eval function raised an exception at iter {self.iter + 1}: {e}")
+                    metrics = None
+
+                # Optional: log eval metrics to TensorBoard
+                if metrics and summary_writer is not None:
+                    for name, value in metrics.items():
+                        try:
+                            scalar = float(value)
+                        except Exception:
+                            continue
+                            # skip non-scalar metric
+                        try:
+                            summary_writer.add_scalar(f"eval/{name}", scalar, self.iter + 1)
+                        except Exception:
+                            pass
+
+            # Step-based checkpoint hook
+            save_every = getattr(self, "save_every", 0)
+            checkpoint_fn = getattr(self, "checkpoint_fn", None)
+            if save_every and checkpoint_fn is not None and ((self.iter + 1) % save_every == 0):
+                try:
+                    checkpoint_fn(self.iter + 1, qctn, loss_value)
+                except Exception as e:
+                    print(f"[Optimizer] Checkpoint function raised an exception at iter {self.iter + 1}: {e}")
 
             self.iter += 1
         else:

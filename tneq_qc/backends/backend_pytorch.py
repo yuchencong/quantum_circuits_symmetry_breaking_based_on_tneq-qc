@@ -13,15 +13,22 @@ from .backend_interface import ComputeBackend, BackendInfo
 class BackendPyTorch(ComputeBackend):
     """PyTorch computational backend."""
 
-    def __init__(self, device: Optional[str] = None):
+    def __init__(self, device: Optional[str] = None, dtype: Optional[Any] = None,
+                 tensor_type: Optional[str] = None):
         """
         Initialize PyTorch backend.
         
         Args:
             device (Optional[str]): Device specification ('cpu', 'cuda', 'cuda:0', etc.).
                 If None, automatically selects 'cuda' if available, otherwise 'cpu'.
+            dtype (Optional[Any]): Default dtype for tensors. Can be a torch.dtype
+                or a string like 'float32', 'float64', 'complex64', 'complex128', 'complex'.
+            tensor_type (Optional[str]): High-level tensor wrapper type.
+                Pass ``"TNTensor"`` to have :meth:`init_random_core` return
+                :class:`TNTensor` instances and :meth:`get_tensor_type` report
+                ``TNTensor``.
         """
-        super().__init__()
+        super().__init__(tensor_type=tensor_type)
         try:
             import torch
             self.torch = torch
@@ -29,11 +36,65 @@ class BackendPyTorch(ComputeBackend):
             # Auto-detect device if not specified
             if device is None:
                 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-            
-            # Create BackendInfo
-            self.backend_info = BackendInfo('pytorch', device=device)
+
+            # Resolve and store default dtype
+            self.default_dtype = self._resolve_default_dtype(dtype)
+
+            # Create BackendInfo with logical dtype string
+            self.backend_info = BackendInfo(
+                'pytorch',
+                device=device,
+                dtype=self._dtype_to_string(self.default_dtype),
+            )
         except ImportError:
             raise ImportError("PyTorch is not installed. Please install it with: pip install torch")
+
+    def _resolve_default_dtype(self, dtype: Optional[Any]):
+        """
+        将用户提供的 dtype 解析为 torch.dtype。
+
+        支持：
+        - None: 使用 torch.float32
+        - 字符串: 'float32', 'float64', 'complex64', 'complex128', 'complex'
+        - 直接传入 torch.dtype
+        """
+        torch = self.torch
+        if dtype is None:
+            return torch.float32
+
+        if isinstance(dtype, str):
+            mapping = {
+                'float32': torch.float32,
+                'float64': torch.float64,
+                'complex64': torch.complex64,
+                'complex128': torch.complex128,
+                # 允许简写 'complex'，默认 complex64
+                'complex': torch.complex64,
+            }
+            if dtype not in mapping:
+                raise ValueError(
+                    f"Unsupported dtype string '{dtype}' for BackendPyTorch. "
+                    f"Supported: {list(mapping.keys())}"
+                )
+            return mapping[dtype]
+
+        # 假设已经是 torch.dtype
+        return dtype
+
+    def _dtype_to_string(self, dtype: Any) -> str:
+        """将 torch.dtype 转成逻辑上的字符串表示，便于在 BackendInfo 中记录。"""
+        torch = self.torch
+        mapping = {
+            torch.float32: 'float32',
+            torch.float64: 'float64',
+            getattr(torch, 'complex64', None): 'complex64',
+            getattr(torch, 'complex128', None): 'complex128',
+        }
+        for k, v in mapping.items():
+            if k is not None and dtype == k:
+                return v
+        # 回退到 str 表示
+        return str(dtype)
 
     def execute_expression(self, expression, *tensors):
         """
@@ -61,9 +122,12 @@ class BackendPyTorch(ComputeBackend):
             # Prepare tensors and enable gradients for specified arguments
             tensor_args = []
             for i, arg in enumerate(args):
+                # 统一通过 convert_to_tensor 放到正确的 device / dtype 上
                 if not isinstance(arg, self.torch.Tensor):
-                    arg = self.torch.from_numpy(arg).float()
-                
+                    arg = self.convert_to_tensor(arg)
+                else:
+                    arg = self.convert_to_tensor(arg)
+
                 if i in arg_indices:
                     # Enable gradient tracking for parameters to optimize
                     arg.requires_grad_(True)
@@ -76,19 +140,28 @@ class BackendPyTorch(ComputeBackend):
             # Compute loss
             loss = loss_fn(*tensor_args)
 
+            # PyTorch autograd.grad 只支持对实数标量求导；若 loss 为复数则对 loss.real 求导
+            if self.torch.is_complex(loss):
+                loss_for_grad = loss.real
+            else:
+                loss_for_grad = loss
+            if loss_for_grad.ndim > 0:
+                loss_for_grad = loss_for_grad.sum()
+
             # Compute gradients using torch.autograd.grad
-            # This works correctly with both leaf and non-leaf tensors
             grad_tensors = [tensor_args[i] for i in arg_indices]
             gradients = self.torch.autograd.grad(
-                outputs=loss,
+                outputs=loss_for_grad,
                 inputs=grad_tensors,
-                create_graph=False,  # Don't build computation graph for gradients
-                retain_graph=False   # Release computation graph after computing gradients
+                create_graph=False,
+                retain_graph=False
             )
 
-            # Return loss as tensor value (not .item()) to preserve type
-            # Detach it from computation graph to free memory
-            return loss.detach(), gradients
+            # 返回值：loss 为复数时返回实部标量，便于日志/比较
+            out_loss = loss.real.detach() if self.torch.is_complex(loss) else loss.detach()
+            if out_loss.ndim > 0:
+                out_loss = out_loss.sum()
+            return out_loss, gradients
 
         return value_and_grad_fn
 
@@ -105,16 +178,20 @@ class BackendPyTorch(ComputeBackend):
     def convert_to_tensor(self, array):
         """Convert to PyTorch tensor."""
         if isinstance(array, self.torch.Tensor):
-            # Move to correct device if needed
-            if str(array.device) != self.backend_info.device:
-                return array.to(self.backend_info.device)
-            return array
+            # Move to correct device / dtype if needed
+            target = array
+            if str(target.device) != self.backend_info.device:
+                target = target.to(self.backend_info.device)
+            if target.dtype != self.default_dtype:
+                target = target.to(self.default_dtype)
+            return target
         
         # Convert array to tensor based on backend_info
         if not isinstance(array, np.ndarray):
             array = np.array(array)
         
-        tensor = self.torch.from_numpy(array).float()
+        # 使用默认 dtype 创建 tensor
+        tensor = self.torch.as_tensor(array, dtype=self.default_dtype)
         return tensor.to(self.backend_info.device)
 
     def get_backend_name(self) -> str:
@@ -182,9 +259,11 @@ class BackendPyTorch(ComputeBackend):
                     # params[i].scale_to(scale)
                     # params[i].auto_scale()
 
+                    params[i].tensor.requires_grad_(True)
                     # params[i].tensor.grad.zero_()
                 else:
                     params[i] = new_raw_params[i]
+                    params[i].requires_grad_(True)
                     
             return params, new_state
 
@@ -290,6 +369,9 @@ class BackendPyTorch(ComputeBackend):
             else:
                 param_2d = param
                 grad_2d = grad
+
+            # Detect complex for Stiefel step (conjugate and skew-Hermitian)
+            is_complex = self.torch.is_complex(param_2d)
             
             # Normalize to get orthogonal matrix
             unity, unity_norm = self._unit(param_2d)
@@ -300,22 +382,26 @@ class BackendPyTorch(ComputeBackend):
                 if random.randint(1, 101) == 1:
                     unity = self._qr_retraction(unity)
                 
-                # Initialize momentum buffer for this core
+                # Initialize momentum buffer for this core (match dtype for complex)
                 if state['momentum_buffer'][i] is None:
-                    state['momentum_buffer'][i] = self.torch.zeros(grad_2d.T.shape, device=param.device)
+                    state['momentum_buffer'][i] = self.torch.zeros(
+                        grad_2d.T.shape, dtype=grad_2d.dtype, device=param.device
+                    )
                 
                 V = state['momentum_buffer'][i]
                 
-                # Update momentum: V = momentum * V - g^T
-                V = momentum * V - grad_2d.T
+                # Update momentum: V = momentum * V - g^H (conjugate transpose for complex)
+                g_T = self.torch.conj(grad_2d).T if is_complex else grad_2d.T
+                V = momentum * V - g_T
                 
-                # Compute the skew-symmetric matrix W
+                # Compute the skew-symmetric (real) or skew-Hermitian (complex) matrix W
                 MX = self.torch.mm(V, unity)
                 XMX = self.torch.mm(unity, MX)
-                XXMX = self.torch.mm(unity.T, XMX)
+                unity_H = self.torch.conj(unity).T if is_complex else unity.T
+                XXMX = self.torch.mm(unity_H, XMX)
                 
                 W_hat = MX - 0.5 * XXMX
-                W = W_hat - W_hat.T  # Make it skew-symmetric
+                W = W_hat - (self.torch.conj(W_hat).T if is_complex else W_hat.T)
                 
                 # Compute adaptive step size
                 W_norm = self._matrix_norm_one(W)
@@ -323,7 +409,12 @@ class BackendPyTorch(ComputeBackend):
                 alpha = min(t, lr)
                 
                 # Apply Cayley transform: Y(alpha) = (I - alpha/2 * W)^{-1} (I + alpha/2 * W) X
-                p_new = self._compute_cayley_transform(alpha, W, unity.T).T
+                # For complex: X = unity^H, then p_new = conj(Y)^T
+                if is_complex:
+                    p_new_t = self._compute_cayley_transform(alpha, W, unity_H)
+                    p_new = self.torch.conj(p_new_t).T
+                else:
+                    p_new = self._compute_cayley_transform(alpha, W, unity.T).T
                 
                 # Reshape back to original shape
                 if len(param_shape) > 2:
@@ -331,8 +422,8 @@ class BackendPyTorch(ComputeBackend):
                 
                 new_params.append(p_new)
                 
-                # Update momentum buffer
-                V_new = self.torch.mm(W, unity.T)
+                # Update momentum buffer: V_new = W @ unity^H
+                V_new = self.torch.mm(W, unity_H)
                 state['momentum_buffer'][i] = V_new
                 
             else:
@@ -352,7 +443,10 @@ class BackendPyTorch(ComputeBackend):
         tan_vec_T = tan_vec.T
         q, r = self.torch.linalg.qr(tan_vec_T, mode='reduced')
         d = self.torch.diag(r)
-        ph = self.torch.sign(d)
+        if self.torch.is_complex(d):
+            ph = self.torch.sgn(d)
+        else:
+            ph = self.torch.sign(d)
         q = q * ph.unsqueeze(0)
         return q.T
     
@@ -363,8 +457,9 @@ class BackendPyTorch(ComputeBackend):
     def _compute_cayley_transform(self, alpha, W, X):
         """
         Compute Cayley transform: Y(alpha) = (I - alpha/2 * W)^{-1} (I + alpha/2 * W) X
+        Supports both real (skew-symmetric W) and complex (skew-Hermitian W).
         """
-        I = self.torch.eye(W.shape[0], device=W.device)
+        I = self.torch.eye(W.shape[0], dtype=W.dtype, device=W.device)
         left_matrix = I - (alpha / 2) * W
         right_matrix = I + (alpha / 2) * W
         left_inv = self.torch.inverse(left_matrix)
@@ -376,14 +471,30 @@ class BackendPyTorch(ComputeBackend):
         """Initialize random core using QR decomposition for orthogonality."""
         flat_dim = int(np.prod(shape[:len(shape)//2]))
         
-        random_matrix = self.torch.randn((flat_dim, flat_dim), device=self.backend_info.device)
+        random_matrix = self.torch.randn(
+            (flat_dim, flat_dim),
+            device=self.backend_info.device,
+            # dtype=self.default_dtype if not self.torch.is_complex(self.torch.zeros(1, dtype=self.default_dtype)) else self.torch.float32,
+            dtype=self.default_dtype,
+        )
         Q, R = self.torch.linalg.qr(random_matrix)
         d = self.torch.diag(R)
-        sign_correction = self.torch.sign(d)
-        Q = Q * sign_correction.unsqueeze(0)
-        return Q.reshape(shape)
+        if self.torch.is_complex(d):
+            phases = d / (d.abs() + 1e-12)
+            sign_correction = self.torch.diag(phases.conj())
+            # sign_correction = phases.conj()
+            Q = Q @ sign_correction
+        else:
+            sign_correction = self.torch.sign(d)
+            Q = Q * sign_correction.unsqueeze(0)
+        
 
-    def get_tensor_type(self):
+        # 如果默认 dtype 是复数，则将实数正交矩阵提升到复数 dtype
+        if self.torch.is_complex(self.torch.zeros(1, dtype=self.default_dtype)):
+            Q = Q.to(self.default_dtype)
+        return self.wrap_tensor(Q.reshape(shape))
+
+    def _get_raw_tensor_type(self):
         return self.torch.Tensor
 
     def set_random_seed(self, seed: int):
@@ -407,19 +518,19 @@ class BackendPyTorch(ComputeBackend):
     def eye(self, n: int, dtype=None):
         """Create an identity matrix of size n x n."""
         if dtype is None:
-            dtype = self.torch.float32
+            dtype = self.default_dtype
         return self.torch.eye(n, dtype=dtype, device=self.backend_info.device)
 
     def zeros(self, shape, dtype=None):
         """Create a tensor filled with zeros."""
         if dtype is None:
-            dtype = self.torch.float32
+            dtype = self.default_dtype
         return self.torch.zeros(shape, dtype=dtype, device=self.backend_info.device)
 
     def ones(self, shape, dtype=None):
         """Create a tensor filled with ones."""
         if dtype is None:
-            dtype = self.torch.float32
+            dtype = self.default_dtype
         return self.torch.ones(shape, dtype=dtype, device=self.backend_info.device)
 
     def clone(self, tensor):
@@ -435,7 +546,16 @@ class BackendPyTorch(ComputeBackend):
         return tensor.expand(*sizes)
 
     def clamp(self, tensor, min=None, max=None):
-        """Clamp tensor values to a range."""
+        """Clamp tensor values to a range.
+
+        PyTorch 不支持对 complex 张量直接 clamp，这里只对实部做裁剪，
+        虚部保持不变，满足本项目中“概率/密度在实部非负”的需求。
+        """
+        if self.torch.is_complex(tensor):
+            real = self.torch.real(tensor)
+            imag = self.torch.imag(tensor)
+            real_clamped = self.torch.clamp(real, min=min, max=max)
+            return self.torch.complex(real_clamped, imag)
         return self.torch.clamp(tensor, min=min, max=max)
 
     def diagonal(self, tensor, dim1=-2, dim2=-1):
@@ -511,7 +631,7 @@ class BackendPyTorch(ComputeBackend):
     def linspace(self, start, end, steps, dtype=None):
         """Create a 1-D tensor of size steps with values linearly spaced in range [start, end]."""
         if dtype is None:
-            dtype = self.torch.float32
+            dtype = self.default_dtype
         return self.torch.linspace(start, end, steps, dtype=dtype, device=self.backend_info.device)
 
     def cumsum(self, tensor, dim, dtype=None):
@@ -521,12 +641,23 @@ class BackendPyTorch(ComputeBackend):
     def rand(self, size, dtype=None):
         """Returns a tensor filled with random numbers from a uniform distribution on the interval [0, 1)."""
         if dtype is None:
-            dtype = self.torch.float32
+            dtype = self.default_dtype
         return self.torch.rand(size, dtype=dtype, device=self.backend_info.device)
 
     def real(self, tensor):
         """Returns the real part of the tensor."""
         return self.torch.real(tensor)
+
+    def is_complex(self, tensor) -> bool:
+        """Return True if tensor is complex dtype."""
+        return self.torch.is_complex(tensor)
+
+    def abs_square(self, tensor):
+        """Born rule: for complex return |tensor|^2 (real); for real return as-is."""
+        if self.torch.is_complex(tensor):
+            r, i = self.torch.real(tensor), self.torch.imag(tensor)
+            return r * r + i * i
+        return tensor
 
     def gather(self, input, dim, index):
         """Gathers values along an axis specified by dim."""

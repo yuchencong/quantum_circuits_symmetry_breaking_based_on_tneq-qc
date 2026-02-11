@@ -6,6 +6,7 @@ from typing import Union, Any, Optional, Mapping
 from ..config import Configuration
 from ..backends.copteinsum import ContractorOptEinsum
 from .tn_tensor import TNTensor
+from .tn_graph import TNGraph
 
 class QCTNHelper:
     """
@@ -39,7 +40,7 @@ class QCTNHelper:
                     "-2-----B-6-----D-----2-\n" \
                     "-2-A-3-----C-8-D-----2-"
         else:
-            def generate_std_graph(n, dim_char=None):
+            def generate_mps_graph(n, dim_char=None):
                 graph = ""
                 # char_list = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z']
                 # char_list = [next(QCTNHelper.iter_symbols(True)) for _ in range(n)]
@@ -276,13 +277,8 @@ class QCTNHelper:
 
                 return graph.rstrip()
 
-
-
-
-
-
-            if graph_type == "std":
-                return generate_std_graph(n, dim_char)
+            if graph_type == "mps":
+                return generate_mps_graph(n, dim_char)
             elif graph_type == "tree":
                 return generate_tree_graph(n, dim_char)
             elif graph_type == "wall":
@@ -291,7 +287,7 @@ class QCTNHelper:
                 L = 4
                 return generate_wall_graph(n, L, dim_char)
         
-            return generate_std_graph(n, dim_char)
+            return generate_mps_graph(n, dim_char)
 
             # return  "-3-A-3-"
             # return  "-3-A-3-B-3-C-3-D-3-"
@@ -491,11 +487,13 @@ class QCTN:
             graph (str): A string representation of the quantum circuit graph.
             backend (ComputeBackend): The backend to use for computation.
         """
-        self.graph = graph
         self.qubits = graph.strip().splitlines()
         self.nqubits = len(self.qubits)
         self.qubit_indices = list(range(self.nqubits))
-        
+
+        self.graph = graph
+        self.tn_graph = TNGraph(graph, self.nqubits)
+
         import opt_einsum
         idx2core = [opt_einsum.get_symbol(i) for i in range(10000)]
         core2idx = {c: i for i, c in enumerate(idx2core)}
@@ -578,6 +576,8 @@ class QCTN:
         """
         String representation of the QCTN object.
         """
+        # print(f"adjacency_table: {self.adjacency_table}")
+
         adjacency_matrix = np.empty((self.ncores, self.ncores), dtype=object)
         for i in range(self.ncores):
             for j in range(self.ncores):
@@ -586,7 +586,7 @@ class QCTN:
         circuit_input = [str(rank) for rank in self.circuit[0]]
         circuit_output = [str(rank) for rank in self.circuit[2]]
 
-        return f"circuit_input = \n{circuit_input}\n adjacency_matrix = \n{adjacency_matrix}\n circuit_output = \n{circuit_output}\n"
+        return f"circuit_input = \n{circuit_input}\n adjacency_matrix = \n{adjacency_matrix}\n adjacency_table = \n{self.adjacency_table}\n circuit_output = \n{circuit_output}\n"
 
     def _circuit_to_adjacency(self,):
         """
@@ -759,6 +759,146 @@ class QCTN:
             # self.cores_weights[core_name] = core
             # self.cores_weights[core_name].auto_scale()
 
+    def set_cores(self, cores, strict: bool = True):
+        """
+        Set core tensors from a list or dict.
+
+        Each supplied tensor is validated to have the **same total number of
+        elements** (numel) as the corresponding existing core weight.  If the
+        shapes differ but the sizes match, the tensor is reshaped to the
+        target core weight's shape.
+
+        Args:
+            cores (list | dict):
+                * **list** – tensors are matched to ``self.cores`` by
+                  positional order.
+
+                  - *strict=True*: ``len(cores)`` must equal ``self.ncores``.
+                  - *strict=False*: only the first ``min(len(cores), ncores)``
+                    cores are set; a warning is emitted if the lengths differ.
+
+                * **dict** – keys are core names (single-character symbols).
+
+                  - *strict=True*: the key set must exactly equal
+                    ``set(self.cores)`` (no missing, no extra keys).
+                  - *strict=False*: only the intersection of keys is used;
+                    warnings list any missing or extra keys.
+
+            strict (bool): Whether to require an exact one-to-one match.
+                Defaults to ``True``.
+
+        Raises:
+            TypeError: If *cores* is neither a list nor a dict.
+            ValueError: If *strict=True* and the sizes / keys do not match,
+                or if any tensor's total element count differs from its
+                target core weight.
+        """
+        import warnings
+
+        if isinstance(cores, list):
+            self._set_cores_from_list(cores, strict)
+        elif isinstance(cores, dict):
+            self._set_cores_from_dict(cores, strict)
+        else:
+            raise TypeError(
+                f"cores must be a list or dict, got {type(cores).__name__}"
+            )
+
+    # ------------------------------------------------------------------
+    # Internal helpers for set_cores
+    # ------------------------------------------------------------------
+
+    def _set_single_core(self, core_name: str, tensor):
+        """
+        Validate *tensor* against the existing weight for *core_name*,
+        reshape if necessary, and store it.
+
+        Raises:
+            ValueError: If the total number of elements does not match.
+        """
+        target = self.cores_weights[core_name]
+        target_shape = tuple(target.shape)
+        target_numel = int(np.prod(target_shape))
+
+        src_shape = tuple(tensor.shape)
+        src_numel = int(np.prod(src_shape))
+
+        if src_numel != target_numel:
+            raise ValueError(
+                f"Core '{core_name}': size mismatch — input has "
+                f"{src_numel} elements (shape {src_shape}) but target "
+                f"has {target_numel} elements (shape {target_shape})."
+            )
+
+        if src_shape != target_shape:
+            tensor = self.backend.reshape(tensor, list(target_shape))
+
+        self.cores_weights[core_name] = tensor
+
+    def _set_cores_from_list(self, cores: list, strict: bool):
+        import warnings
+
+        if strict:
+            if len(cores) != self.ncores:
+                raise ValueError(
+                    f"strict=True: expected {self.ncores} core tensors, "
+                    f"got {len(cores)}."
+                )
+            for idx, tensor in enumerate(cores):
+                self._set_single_core(self.cores[idx], tensor)
+        else:
+            n = min(len(cores), self.ncores)
+            if len(cores) != self.ncores:
+                warnings.warn(
+                    f"strict=False: input list has {len(cores)} tensors but "
+                    f"QCTN has {self.ncores} cores. Only the first {n} will "
+                    f"be set.",
+                    stacklevel=3,
+                )
+            for idx in range(n):
+                self._set_single_core(self.cores[idx], cores[idx])
+
+    def _set_cores_from_dict(self, cores: dict, strict: bool):
+        import warnings
+
+        input_keys = set(cores.keys())
+        self_keys = set(self.cores)
+
+        if strict:
+            if input_keys != self_keys:
+                missing = self_keys - input_keys
+                extra = input_keys - self_keys
+                parts = []
+                if missing:
+                    parts.append(f"missing keys ({len(missing)}): {missing}")
+                if extra:
+                    parts.append(f"extra keys ({len(extra)}): {extra}")
+                raise ValueError(
+                    f"strict=True: key mismatch — {'; '.join(parts)}."
+                )
+            for core_name in self.cores:
+                self._set_single_core(core_name, cores[core_name])
+        else:
+            common = input_keys & self_keys
+            missing = self_keys - input_keys
+            extra = input_keys - self_keys
+            if missing:
+                warnings.warn(
+                    f"strict=False: {len(missing)} core(s) missing from "
+                    f"input dict and will keep their current weights: "
+                    f"{missing}",
+                    stacklevel=3,
+                )
+            if extra:
+                warnings.warn(
+                    f"strict=False: {len(extra)} extra key(s) in input dict "
+                    f"will be ignored: {extra}",
+                    stacklevel=3,
+                )
+            for core_name in self.cores:
+                if core_name in common:
+                    self._set_single_core(core_name, cores[core_name])
+
     def save_cores(self, file_path: Union[str, Path], metadata: Optional[Mapping[str, str]] = None):
         """Save all core tensors into a safetensors file."""
 
@@ -773,9 +913,14 @@ class QCTN:
         tensor_dict = {}
         for core_name, tensor in self.cores_weights.items():
             if isinstance(tensor, TNTensor):
-                tensor_dict[f"core_{core_name}"] = self.backend.tensor_to_numpy(tensor.tensor * tensor.scale)
+                arr = self.backend.tensor_to_numpy(tensor.tensor * tensor.scale)
             else:
-                tensor_dict[f"core_{core_name}"] = self.backend.tensor_to_numpy(tensor)
+                arr = self.backend.tensor_to_numpy(tensor)
+            if np.iscomplexobj(arr):
+                tensor_dict[f"core_{core_name}_real"] = np.ascontiguousarray(arr.real)
+                tensor_dict[f"core_{core_name}_imag"] = np.ascontiguousarray(arr.imag)
+            else:
+                tensor_dict[f"core_{core_name}"] = np.ascontiguousarray(arr)
 
         metadata_dict = {} if metadata is None else {str(k): str(v) for k, v in metadata.items()}
         save_file(tensor_dict, str(file_path), metadata=metadata_dict)
@@ -800,16 +945,19 @@ class QCTN:
 
         for core_name in self.cores:
             key = f"core_{core_name}"
-            if key not in tensor_dict:
+            key_real, key_imag = f"core_{core_name}_real", f"core_{core_name}_imag"
+            if key_real in tensor_dict:
+                array = tensor_dict[key_real] + 1j * tensor_dict[key_imag]
+            elif key in tensor_dict:
+                array = tensor_dict[key]
+            else:
                 if strict:
                     raise KeyError(f"Missing tensor for core {core_name} in {file_path}")
                 continue
-            array = tensor_dict[key]
             tensor = self.backend.convert_to_tensor(array)
-            # tn_tensor = TNTensor(tensor)
-            # tn_tensor.auto_scale()
-            # self.cores_weights[core_name] = tn_tensor
-            self.cores_weights[core_name] = tensor
+            tn_tensor = TNTensor(tensor)
+            tn_tensor.auto_scale()
+            self.cores_weights[core_name] = tn_tensor
 
         metadata_dict = {str(k): str(v) for k, v in metadata.items()}
         self._loaded_metadata = metadata_dict
@@ -1061,4 +1209,315 @@ class QCTN:
             raise TypeError("attach must be an instance of QCTN.")
         
         return optimizer.optimize(self.contract_with_QCTN_for_gradient, attach, engine=engine)
+
+    # ================================================================
+    # Graph manipulation helpers
+    # ================================================================
+
+    @staticmethod
+    def _parse_qubit_line(line):
+        """
+        Parse a qubit line into a sequence of tokens.
+
+        Given a graph line like ``-2-A-5-B-3-``, returns::
+
+            [('dim', 2), ('core', 'A'), ('dim', 5), ('core', 'B'), ('dim', 3)]
+
+        After stripping all dashes, the remaining characters are either
+        digit-sequences (dimensions) or single non-digit characters (core
+        symbols).  They always alternate ``dim, core, dim, core, …, dim``.
+
+        Args:
+            line (str): A single qubit line from the graph.
+
+        Returns:
+            list[tuple]: ``[(type, value), ...]`` where *type* is ``'dim'``
+            or ``'core'``.
+        """
+        cleaned = line.strip().replace("-", "")
+        result = []
+        i = 0
+        while i < len(cleaned):
+            if cleaned[i].isdigit():
+                j = i
+                while j < len(cleaned) and cleaned[j].isdigit():
+                    j += 1
+                result.append(('dim', int(cleaned[i:j])))
+                i = j
+            else:
+                result.append(('core', cleaned[i]))
+                i += 1
+        return result
+
+    @staticmethod
+    def _rebuild_qubit_line(tokens):
+        """
+        Rebuild a qubit line string from parsed tokens.
+
+        Args:
+            tokens: list of ``(type, value)`` tuples, e.g.
+                ``[('dim', 2), ('core', 'A'), ('dim', 5)]``
+
+        Returns:
+            str: Rebuilt qubit line, e.g. ``-2-A-5-``
+        """
+        parts = [str(val) for _, val in tokens]
+        return "-" + "-".join(parts) + "-"
+
+    @staticmethod
+    def _remap_graph(graph_lines, core_map):
+        """
+        Remap core symbols in graph lines according to *core_map*.
+
+        Each character in every line is independently looked up in
+        *core_map*; if found it is replaced, otherwise kept as-is.  This
+        is safe because core symbols are single, non-digit, non-dash
+        characters.
+
+        Args:
+            graph_lines (list[str]): Qubit line strings.
+            core_map (dict[str, str]): ``{old_symbol: new_symbol}``.
+
+        Returns:
+            list[str]: Remapped qubit line strings.
+        """
+        new_lines = []
+        for line in graph_lines:
+            new_line = []
+            for ch in line:
+                new_line.append(core_map.get(ch, ch))
+            new_lines.append("".join(new_line))
+        return new_lines
+
+    # ================================================================
+    # Split / Merge operations
+    # ================================================================
+
+    def split(self, split_idx=None):
+        """
+        Split the QCTN into two QCTNs by core tensor index.
+
+        Cores are divided into two groups:
+
+        * **Group 1**: ``self.cores[:split_idx]``
+        * **Group 2**: ``self.cores[split_idx:]``
+
+        For each qubit line that contains cores from both groups, the bond
+        dimension at the boundary becomes the output dimension for Group 1
+        and the input dimension for Group 2.  Qubit lines that only
+        contain cores from a single group are assigned entirely to that
+        group's QCTN.
+
+        Args:
+            split_idx (int, optional): Index at which to split the core
+                list.  Defaults to ``ncores // 2``.
+
+        Returns:
+            tuple[QCTN, QCTN]: Two new QCTN instances with the
+            corresponding core weights copied.
+
+        Raises:
+            ValueError: If *split_idx* is out of range, or if cores from
+                both groups are interleaved on any qubit line (i.e. a
+                Group-1 core appears **after** a Group-2 core).
+        """
+        if split_idx is None:
+            split_idx = self.ncores // 2
+
+        if split_idx <= 0 or split_idx >= self.ncores:
+            raise ValueError(
+                f"split_idx must be between 1 and {self.ncores - 1}, "
+                f"got {split_idx}"
+            )
+
+        cores_group1 = set(self.cores[:split_idx])
+        cores_group2 = set(self.cores[split_idx:])
+
+        lines_group1: list[str] = []
+        lines_group2: list[str] = []
+
+        for qubit_idx, line in enumerate(self.qubits):
+            tokens = QCTN._parse_qubit_line(line)
+
+            # Locate core tokens that belong to each group
+            core_positions = [
+                (i, tok[1])
+                for i, tok in enumerate(tokens)
+                if tok[0] == 'core'
+            ]
+            g1_pos = [(i, c) for i, c in core_positions if c in cores_group1]
+            g2_pos = [(i, c) for i, c in core_positions if c in cores_group2]
+
+            if g1_pos and g2_pos:
+                last_g1 = max(i for i, _ in g1_pos)
+                first_g2 = min(i for i, _ in g2_pos)
+
+                if last_g1 >= first_g2:
+                    raise ValueError(
+                        f"Cannot split: cores from both groups are "
+                        f"interleaved on qubit {qubit_idx}. Ensure that "
+                        f"all Group-1 cores appear before Group-2 cores "
+                        f"on every qubit line."
+                    )
+
+                # Group 1: [start … last_g1_core, dim_after_last_g1_core]
+                g1_tokens = tokens[: last_g1 + 2]
+                # Group 2: [dim_before_first_g2_core, first_g2_core … end]
+                g2_tokens = tokens[first_g2 - 1 :]
+
+                lines_group1.append(QCTN._rebuild_qubit_line(g1_tokens))
+                lines_group2.append(QCTN._rebuild_qubit_line(g2_tokens))
+            elif g1_pos:
+                lines_group1.append(QCTN._rebuild_qubit_line(tokens))
+            elif g2_pos:
+                lines_group2.append(QCTN._rebuild_qubit_line(tokens))
+            # else: qubit has no cores — skip (shouldn't happen)
+
+        if not lines_group1:
+            raise ValueError(
+                "After split, Group 1 has no qubit lines. "
+                "All qubits belong to Group 2."
+            )
+        if not lines_group2:
+            raise ValueError(
+                "After split, Group 2 has no qubit lines. "
+                "All qubits belong to Group 1."
+            )
+
+        graph1 = "\n".join(lines_group1)
+        graph2 = "\n".join(lines_group2)
+
+        qctn1 = QCTN(graph1, backend=self.backend)
+        qctn2 = QCTN(graph2, backend=self.backend)
+
+        # Copy core weights (shapes are unchanged by the split)
+        for core_name in self.cores[:split_idx]:
+            if core_name in self.cores_weights:
+                qctn1.cores_weights[core_name] = self.cores_weights[core_name]
+        for core_name in self.cores[split_idx:]:
+            if core_name in self.cores_weights:
+                qctn2.cores_weights[core_name] = self.cores_weights[core_name]
+
+        return qctn1, qctn2
+
+    @staticmethod
+    def merge(qctn1, qctn2):
+        """
+        Left-right merge of two QCTNs into a single new QCTN (static method).
+
+        The merged QCTN places *qctn1*'s graph on the left and *qctn2*'s
+        graph on the right, concatenating each qubit line horizontally.
+
+        Rules:
+
+        1. The resulting number of qubits is ``max(qctn1.nqubits, qctn2.nqubits)``.
+        2. The QCTN with fewer qubits is padded at the bottom with
+           dash-only lines so that both sides have the same number of rows.
+        3. The right boundary (``-dim-`` at end) of *qctn1* and the left
+           boundary (``-dim-`` at start) of *qctn2* overlap – only one
+           copy is kept.  The boundary from the QCTN that originally has
+           **more qubits** is preserved (if equal, *qctn1*'s is kept).
+        4. Core tensors are renamed contiguously via
+           ``opt_einsum.get_symbol(0, 1, 2, …)``.
+
+        Args:
+            qctn1 (QCTN): Left QCTN.
+            qctn2 (QCTN): Right QCTN.
+
+        Returns:
+            QCTN: A new merged QCTN with renamed cores and copied weights.
+        """
+        import opt_einsum
+
+        n1, n2 = qctn1.nqubits, qctn2.nqubits
+        max_qubits = max(n1, n2)
+
+        # ---- core symbol renaming ----
+        total_cores = qctn1.ncores + qctn2.ncores
+        new_symbols = [opt_einsum.get_symbol(i) for i in range(total_cores)]
+
+        core_map1 = {
+            old: new_symbols[i] for i, old in enumerate(qctn1.cores)
+        }
+        core_map2 = {
+            old: new_symbols[qctn1.ncores + i]
+            for i, old in enumerate(qctn2.cores)
+        }
+
+        remapped1 = QCTN._remap_graph(qctn1.qubits, core_map1)
+        remapped2 = QCTN._remap_graph(qctn2.qubits, core_map2)
+
+        # ---- determine padding widths ----
+        # Use the max width of each side's real lines as the padding width
+        # for the extra qubit rows added to the shorter side.
+        # stripped_l1 = l1 without right boundary, stripped_l2 = l2 without left boundary
+        pad_width1 = max(len(l) for l in remapped1) - 3
+        pad_width2 = max(len(l) for l in remapped2) - 3
+
+        # ---- horizontal merge ----
+        new_lines = []
+        for qi in range(max_qubits):
+            has_l1 = qi < n1
+            has_l2 = qi < n2
+
+            l1 = remapped1[qi] if has_l1 else ("-" * pad_width1)
+            l2 = remapped2[qi] if has_l2 else ("-" * pad_width2)
+
+            # Extract 4 segments:
+            #   stripped_l1: l1 with right boundary removed  (e.g. "-3-A-5-B")
+            #   dim_l1:      right boundary of l1            (e.g. "-3-")
+            #   dim_l2:      left boundary of l2             (e.g. "-3-")
+            #   stripped_l2: l2 with left boundary removed   (e.g. "C-5-D-3-")
+            m1 = re.search(r'-\d+-$', l1)
+            dim_l1 = m1.group() if has_l1 else ""
+            stripped_l1 = l1[:m1.start()] if has_l1 else l1
+
+            m2 = re.match(r'^-\d+-', l2)
+            dim_l2 = m2.group() if has_l2 else ""
+            stripped_l2 = l2[m2.end():] if has_l2 else l2
+
+            if has_l1 and has_l2:
+                # Both exist: keep qctn1's right boundary as the shared dim
+                merged = stripped_l1 + dim_l1 + stripped_l2
+            elif has_l1:
+                # Only l1 exists: pad the right side
+                dim_l2 = '---'
+                merged = stripped_l1 + stripped_l2 + dim_l1
+            else:
+                # Only l2 exists: pad the left side
+                dim_l1 = '---'
+                merged = dim_l2 + stripped_l1 + stripped_l2
+
+            new_lines.append(merged)
+
+        new_graph = "\n".join(new_lines)
+
+        backend = qctn1.backend if qctn1.backend is not None else qctn2.backend
+        new_qctn = QCTN(new_graph, backend=backend)
+
+        # Copy core weights under their new names
+        for old_name, new_name in core_map1.items():
+            if old_name in qctn1.cores_weights:
+                new_qctn.cores_weights[new_name] = qctn1.cores_weights[old_name]
+        for old_name, new_name in core_map2.items():
+            if old_name in qctn2.cores_weights:
+                new_qctn.cores_weights[new_name] = qctn2.cores_weights[old_name]
+
+        return new_qctn
+
+    def merge_with(self, other):
+        """
+        Merge *self* with another QCTN and return a new QCTN.
+
+        Equivalent to ``QCTN.merge(self, other)``.  The result has
+        *self*'s cores first (preserving relative order), followed by
+        *other*'s cores, with all core names reassigned contiguously.
+
+        Args:
+            other (QCTN): Another QCTN to merge with.
+
+        Returns:
+            QCTN: A new merged QCTN.
+        """
+        return QCTN.merge(self, other)
     
