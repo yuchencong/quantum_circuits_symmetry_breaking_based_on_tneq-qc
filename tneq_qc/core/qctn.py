@@ -1403,29 +1403,39 @@ class QCTN:
     @staticmethod
     def merge(qctn1, qctn2):
         """
-        Merge two QCTNs into a single new QCTN (static method).
+        Left-right merge of two QCTNs into a single new QCTN (static method).
 
-        The merged QCTN contains all qubits from *qctn1* followed by all
-        qubits from *qctn2*.  Core tensors are renamed so that:
+        The merged QCTN places *qctn1*'s graph on the left and *qctn2*'s
+        graph on the right, concatenating each qubit line horizontally.
 
-        1. *qctn1*'s cores come first (preserving their relative order).
-        2. *qctn2*'s cores follow (preserving their relative order).
-        3. New names are assigned contiguously via
+        Rules:
+
+        1. The resulting number of qubits is ``max(qctn1.nqubits, qctn2.nqubits)``.
+        2. The QCTN with fewer qubits is padded at the bottom with
+           dash-only lines so that both sides have the same number of rows.
+        3. The right boundary (``-dim-`` at end) of *qctn1* and the left
+           boundary (``-dim-`` at start) of *qctn2* overlap – only one
+           copy is kept.  The boundary from the QCTN that originally has
+           **more qubits** is preserved (if equal, *qctn1*'s is kept).
+        4. Core tensors are renamed contiguously via
            ``opt_einsum.get_symbol(0, 1, 2, …)``.
 
         Args:
-            qctn1 (QCTN): First QCTN.
-            qctn2 (QCTN): Second QCTN.
+            qctn1 (QCTN): Left QCTN.
+            qctn2 (QCTN): Right QCTN.
 
         Returns:
             QCTN: A new merged QCTN with renamed cores and copied weights.
         """
         import opt_einsum
 
+        n1, n2 = qctn1.nqubits, qctn2.nqubits
+        max_qubits = max(n1, n2)
+
+        # ---- core symbol renaming ----
         total_cores = qctn1.ncores + qctn2.ncores
         new_symbols = [opt_einsum.get_symbol(i) for i in range(total_cores)]
 
-        # old → new mappings (independent for each source QCTN)
         core_map1 = {
             old: new_symbols[i] for i, old in enumerate(qctn1.cores)
         }
@@ -1434,9 +1444,52 @@ class QCTN:
             for i, old in enumerate(qctn2.cores)
         }
 
-        # Remap & concatenate graph lines
-        new_lines = QCTN._remap_graph(qctn1.qubits, core_map1)
-        new_lines += QCTN._remap_graph(qctn2.qubits, core_map2)
+        remapped1 = QCTN._remap_graph(qctn1.qubits, core_map1)
+        remapped2 = QCTN._remap_graph(qctn2.qubits, core_map2)
+
+        # ---- determine padding widths ----
+        # Use the max width of each side's real lines as the padding width
+        # for the extra qubit rows added to the shorter side.
+        # stripped_l1 = l1 without right boundary, stripped_l2 = l2 without left boundary
+        pad_width1 = max(len(l) for l in remapped1) - 3
+        pad_width2 = max(len(l) for l in remapped2) - 3
+
+        # ---- horizontal merge ----
+        new_lines = []
+        for qi in range(max_qubits):
+            has_l1 = qi < n1
+            has_l2 = qi < n2
+
+            l1 = remapped1[qi] if has_l1 else ("-" * pad_width1)
+            l2 = remapped2[qi] if has_l2 else ("-" * pad_width2)
+
+            # Extract 4 segments:
+            #   stripped_l1: l1 with right boundary removed  (e.g. "-3-A-5-B")
+            #   dim_l1:      right boundary of l1            (e.g. "-3-")
+            #   dim_l2:      left boundary of l2             (e.g. "-3-")
+            #   stripped_l2: l2 with left boundary removed   (e.g. "C-5-D-3-")
+            m1 = re.search(r'-\d+-$', l1)
+            dim_l1 = m1.group() if has_l1 else ""
+            stripped_l1 = l1[:m1.start()] if has_l1 else l1
+
+            m2 = re.match(r'^-\d+-', l2)
+            dim_l2 = m2.group() if has_l2 else ""
+            stripped_l2 = l2[m2.end():] if has_l2 else l2
+
+            if has_l1 and has_l2:
+                # Both exist: keep qctn1's right boundary as the shared dim
+                merged = stripped_l1 + dim_l1 + stripped_l2
+            elif has_l1:
+                # Only l1 exists: pad the right side
+                dim_l2 = '---'
+                merged = stripped_l1 + stripped_l2 + dim_l1
+            else:
+                # Only l2 exists: pad the left side
+                dim_l1 = '---'
+                merged = dim_l2 + stripped_l1 + stripped_l2
+
+            new_lines.append(merged)
+
         new_graph = "\n".join(new_lines)
 
         backend = qctn1.backend if qctn1.backend is not None else qctn2.backend

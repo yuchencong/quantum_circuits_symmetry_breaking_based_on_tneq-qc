@@ -57,8 +57,8 @@ def main():
     # 2. 对 QCTN 做 split 操作
     # ------------------------------------------------------------------
     left_qctn, right_qctn = qctn.split()
-    print(f"Left  QCTN: nqubits = {left_qctn.nqubits}, ncores = {left_qctn.ncores}, graph = {left_qctn}")
-    print(f"Right QCTN: nqubits = {right_qctn.nqubits}, ncores = {right_qctn.ncores}, graph = {right_qctn}")
+    print(f"Left  QCTN: nqubits = {left_qctn.nqubits}, ncores = {left_qctn.ncores}, qctn = {left_qctn} graph: \n{left_qctn.graph}")
+    print(f"Right QCTN: nqubits = {right_qctn.nqubits}, ncores = {right_qctn.ncores}, qctn = {right_qctn} graph: \n{right_qctn.graph}")
 
     # ------------------------------------------------------------------
     # 3. 对两个子 QCTN 做 merge 操作
@@ -67,10 +67,11 @@ def main():
     print(
         f"Merged QCTN: nqubits = {merged_qctn.nqubits}, "
         f"ncores = {merged_qctn.ncores}"
+        f'graph : \n{merged_qctn.graph}',
     )
 
     # ------------------------------------------------------------------
-    # 4. 可视化：原始 / 子网络 / 合并后 的邻接矩阵
+    # 5. 可视化：原始 / 子网络 / 合并后 的邻接矩阵
     # ------------------------------------------------------------------
     adj_orig = _adjacency_to_array(qctn.adjacency_matrix)
     adj_left = _adjacency_to_array(left_qctn.adjacency_matrix)
@@ -102,6 +103,50 @@ def main():
 
     plt.tight_layout()
     plt.show()
+
+    # ------------------------------------------------------------------
+    # 4. 初始化三种结构的 QCTN (mps / tree / wall)，两两左右 merge
+    # ------------------------------------------------------------------
+    n_mps, n_tree, n_wall = 5, 5, 4
+
+    graph_mps = QCTNHelper.generate_example_graph(n=n_mps, graph_type="mps", dim_char="3")
+    graph_tree = QCTNHelper.generate_example_graph(n=n_tree, graph_type="tree", dim_char="3")
+    graph_wall = QCTNHelper.generate_example_graph(n=n_wall, graph_type="wall", dim_char="3")
+
+    qctn_mps = QCTN(graph_mps, backend=backend)
+    qctn_tree = QCTN(graph_tree, backend=backend)
+    qctn_wall = QCTN(graph_wall, backend=backend)
+
+    print("=" * 60)
+    print("Step 4: Three QCTN structures and pairwise left-right merge")
+    print("=" * 60)
+
+    print(f"\n[MPS]  nqubits={qctn_mps.nqubits}, ncores={qctn_mps.ncores}")
+    print(graph_mps)
+
+    print(f"\n[Tree] nqubits={qctn_tree.nqubits}, ncores={qctn_tree.ncores}")
+    print(graph_tree)
+
+    print(f"\n[Wall] nqubits={qctn_wall.nqubits}, ncores={qctn_wall.ncores}")
+    print(graph_wall)
+
+    # ---- MPS + Tree ----
+    merged_mps_tree = QCTN.merge(qctn_mps, qctn_tree)
+    print(f"\n--- Merge(MPS, Tree) ---")
+    print(f"nqubits={merged_mps_tree.nqubits}, ncores={merged_mps_tree.ncores}")
+    print(merged_mps_tree.graph)
+
+    # ---- MPS + Wall ----
+    merged_mps_wall = QCTN.merge(qctn_mps, qctn_wall)
+    print(f"\n--- Merge(MPS, Wall) ---")
+    print(f"nqubits={merged_mps_wall.nqubits}, ncores={merged_mps_wall.ncores}")
+    print(merged_mps_wall.graph)
+
+    # ---- Tree + Wall ----
+    merged_tree_wall = QCTN.merge(qctn_wall, qctn_tree)
+    print(f"\n--- Merge(Wall, Tree) ---")
+    print(f"nqubits={merged_tree_wall.nqubits}, ncores={merged_tree_wall.ncores}")
+    print(merged_tree_wall.graph)
 
 
 if __name__ == "__main__":
