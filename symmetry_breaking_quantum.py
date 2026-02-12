@@ -4,6 +4,7 @@ import opt_einsum as oe
 
 from tneq_qc.core.qctn import QCTN
 from tneq_qc.contractor.einsum_strategy import EinsumStrategy
+from tneq_qc.optim.stiefel_optimizer_complex import SGDG
 
 import random
 import os
@@ -152,20 +153,27 @@ def validate_target_tensor(target_tensor, IM: np.ndarray, backend, n_qubits,n_co
     einsum_eq, tensor_shapes = EinsumStrategy.build_core_only_expression(validate_qctn)
     expr = oe.contract_expression(einsum_eq, *tensor_shapes, optimize="auto")
     params = [torch.nn.Parameter(validate_qctn.cores_weights[c]) for c in validate_qctn.cores]
-    opt = torch.optim.Adam(params, lr=1e-2)
-    for i in range(1000):
+    opt = SGDG(params, lr=1, stiefel = True, momentum=0.9)
+    for i in range(4000):
         opt.zero_grad()
         out = expr(*params)
-        loss = ((out - target_tensor) ** 2).mean()
+        out_f = out.reshape(-1)
+        tar_f = target_tensor.reshape(-1)
+        overlap = torch.vdot(tar_f, out_f)
+        num = overlap.abs() ** 2
+        den = (torch.vdot(tar_f, tar_f).real * torch.vdot(out_f, out_f).real).clamp_min(1e-12)
+        fidelity = num / den
+        loss = 1.0 - fidelity
         loss.backward()
         opt.step()
-        fidelity = (2**n_qubits -2 ** (2*n_qubits-1) *loss)/2**n_qubits
-        # print(f"Validation Fidelity after step {i}: {fidelity}")
+        # print(f"Validation Fidelity after step {i}: {fidelity.item()}")
         if 1-fidelity < 1e-3:
             validate_flag = True
-            print(f"Validation successful, fidelity={fidelity}")
+            print(f"Validation successful, fidelity={fidelity.item()}")
             torch.save(target_tensor, os.path.join(os.path.dirname(__file__), "data", f"nqubit_{n_qubits}_ncore_{n_cores}_{idx}.pt"))
             break
+        if i % 200 == 0:
+            print(f"Validation step {i}, fidelity={fidelity.item()}")
     return validate_flag
 
 
@@ -205,24 +213,29 @@ def symmetry_breaking(IM: np.ndarray, target_tensor, backend, n_qubits, n_cores)
             expr = oe.contract_expression(einsum_eq, *tensor_shapes, optimize="auto")
             params = [torch.nn.Parameter(train_qctn.cores_weights[c]) for c in train_qctn.cores]
 
-            opt = torch.optim.Adam(params, lr=1e-2)
+            opt = SGDG(params, lr=1e-2, stiefel = True, momentum=0.9)
             # out = expr(*params)
             # try to fit target tensor
-            for i in range(2000):
+            for i in range(5000):
                 opt.zero_grad()
                 out = expr(*params)
-                loss = ((out - target_tensor) ** 2).mean()
+                out_f = out.reshape(-1)
+                tar_f = target_tensor.reshape(-1)
+                overlap = torch.vdot(tar_f, out_f)
+                num = overlap.abs() ** 2
+                den = (torch.vdot(tar_f, tar_f).real * torch.vdot(out_f, out_f).real).clamp_min(1e-12)
+                fidelity = num / den
+                loss = 1.0 - fidelity
                 loss.backward()
                 opt.step()
-                # if i % 10 == 0:
-                #     print(i, float(loss))
-                fidelity = (2**n_qubits -2 ** (2*n_qubits-1) *loss)/2**n_qubits
-                # print(f"Fidelity after step {i}: {fidelity}")
+                # print(f"Validation Fidelity after step {i}: {fidelity.item()}")
                 if 1-fidelity < 1e-3:
                     pruned_flag = True
-                    print(f"Successfully pruned core index={idx} , fidelity={fidelity}")
+                    print(f"Successfully pruned core index={idx} , fidelity={fidelity.item()}")
                     pruned_list = candidate
                     break
+                if i % 100 == 0:
+                    print(f"Prune step {i}, fidelity={fidelity.item()}")
         if not pruned_flag:
             print("No more cores can be pruned.")
             break
